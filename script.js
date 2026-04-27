@@ -39,16 +39,17 @@ const videoDB = (() => {
 
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 let map;
-let cards       = [];
-let markers     = {};     // id → L.Marker
-let addMode     = false;
-let tempMarker  = null;
-let tempLatLng  = null;
-let tempAddr    = '';
-let pendingFile = null;
-let activeId    = null;
-let addTab      = 'yt';
-let selCat      = 'other';
+let cards         = [];
+let markers       = {};     // id → L.Marker
+let addMode       = false;
+let tempMarker    = null;
+let tempLatLng    = null;
+let tempAddr      = '';
+let pendingFile   = null;
+let activeId      = null;
+let addTab        = 'yt';
+let selCat        = 'other';
+let searchResults = [];      // Nominatim 결과 캐시
 
 // 드래그 시트
 let sheetDrag = false;
@@ -147,6 +148,9 @@ function startAddMode() {
   document.getElementById('fab-plus').classList.add('hidden');
   document.getElementById('fab-x').classList.remove('hidden');
   document.getElementById('map').classList.add('add-mode');
+  // 배너와 겹치지 않도록 검색바 숨김
+  document.getElementById('search-wrap').classList.add('hidden');
+  clearSearch();
   closeSheet();
 }
 
@@ -157,6 +161,7 @@ function cancelAddMode() {
   document.getElementById('fab-plus').classList.remove('hidden');
   document.getElementById('fab-x').classList.add('hidden');
   document.getElementById('map').classList.remove('add-mode');
+  document.getElementById('search-wrap').classList.remove('hidden');
   clearTempPin();
   closeSheet();
 }
@@ -505,8 +510,120 @@ function goMyLocation() {
   );
 }
 
+// ── 장소 검색 ─────────────────────────────────────────────────────────────────
+const doSearch = debounce(async q => {
+  const drop = document.getElementById('search-drop');
+  if (!q.trim()) { hideDrop(); return; }
+
+  drop.innerHTML = '<li class="no-res"><span class="spin"></span></li>';
+  drop.classList.remove('hidden');
+
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`,
+      { headers: { 'Accept-Language': 'ko,en' } }
+    );
+    searchResults = await res.json();
+    renderDrop(searchResults);
+  } catch {
+    drop.innerHTML = '<li class="no-res">검색 중 오류가 발생했어요</li>';
+  }
+}, 420);
+
+function renderDrop(results) {
+  const drop = document.getElementById('search-drop');
+  if (!results.length) {
+    drop.innerHTML = '<li class="no-res">검색 결과가 없어요</li>';
+    drop.classList.remove('hidden');
+    return;
+  }
+  drop.innerHTML = results.map((r, i) => {
+    const name = shortName(r.display_name);
+    return `<li onclick="selectResult(${i})">
+              <span class="res-name">${esc(name)}</span>
+              <span class="res-full">${esc(r.display_name)}</span>
+            </li>`;
+  }).join('');
+  drop.classList.remove('hidden');
+}
+
+function hideDrop() {
+  document.getElementById('search-drop').classList.add('hidden');
+}
+
+function clearSearch() {
+  const inp = document.getElementById('search-input');
+  inp.value = '';
+  document.getElementById('btn-sc').classList.add('hidden');
+  hideDrop();
+  searchResults = [];
+}
+
+function selectResult(idx) {
+  const r = searchResults[idx];
+  if (!r) return;
+
+  const latlng = L.latLng(parseFloat(r.lat), parseFloat(r.lon));
+
+  // 검색 UI 닫기
+  clearSearch();
+
+  // 지도 이동
+  map.setView(latlng, 16, { animate: true });
+
+  // add mode 조용히 진입 (배너 없이, 검색바 유지)
+  addMode = true;
+  document.getElementById('btn-fab').classList.add('is-cancel');
+  document.getElementById('fab-plus').classList.add('hidden');
+  document.getElementById('fab-x').classList.remove('hidden');
+  document.getElementById('map').classList.add('add-mode');
+
+  // 임시 핀 배치
+  clearTempPin();
+  tempLatLng = latlng;
+  tempAddr   = r.display_name;
+
+  tempMarker = L.marker(latlng, {
+    icon: makeTempIcon(),
+    draggable: true,
+    zIndexOffset: 1000,
+  }).addTo(map);
+
+  tempMarker.on('dragend', e => {
+    tempLatLng = e.target.getLatLng();
+    reverseGeocode(tempLatLng.lat, tempLatLng.lng);
+  });
+
+  // 지도 이동 완료 후 시트 열기
+  setTimeout(() => {
+    openAddSheet();
+    // resetAddForm() 실행 뒤 값 채우기
+    setTimeout(() => {
+      document.getElementById('add-name').value = shortName(r.display_name);
+      document.getElementById('add-addr').textContent = r.display_name;
+    }, 20);
+    map.panBy([0, 80], { animate: true, duration: 0.3 });
+  }, 350);
+}
+
 // ── 이벤트 리스너 ─────────────────────────────────────────────────────────────
 function setupListeners() {
+  // 검색바
+  const sinp = document.getElementById('search-input');
+  sinp.addEventListener('input', e => {
+    const v = e.target.value;
+    document.getElementById('btn-sc').classList.toggle('hidden', !v);
+    doSearch(v);
+  });
+  sinp.addEventListener('keydown', e => {
+    if (e.key === 'Escape') clearSearch();
+    if (e.key === 'Enter' && searchResults.length) selectResult(0);
+  });
+  // 드롭다운 외부 클릭 닫기
+  document.addEventListener('click', e => {
+    if (!document.getElementById('search-wrap').contains(e.target)) hideDrop();
+  });
+
   // YouTube 실시간 미리보기
   const ytEl = document.getElementById('add-yt');
   ytEl.addEventListener('input', debounce(previewYt, 600));

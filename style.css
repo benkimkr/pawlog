@@ -98,6 +98,112 @@ html, body {
   box-shadow: var(--sm);
 }
 
+/* ── 검색바 ── */
+.search-wrap {
+  position: fixed;
+  top: 66px;
+  left: 16px;
+  right: 16px;
+  z-index: 500;
+  transition: opacity .2s;
+}
+.search-wrap.hidden { opacity: 0; pointer-events: none; }
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  background: rgba(10,10,15,.92);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--bdm);
+  border-radius: 50px;
+  box-shadow: var(--sm);
+  transition: border-color .2s, box-shadow .2s;
+}
+.search-bar:focus-within {
+  border-color: var(--acc);
+  box-shadow: 0 0 0 3px rgba(0,87,255,.15);
+}
+
+.search-icon { flex-shrink: 0; color: var(--tmut); }
+
+#search-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  min-width: 0;
+  -webkit-appearance: none;
+}
+#search-input::placeholder { color: var(--tmut); }
+#search-input::-webkit-search-cancel-button { display: none; }
+
+.btn-sc {
+  flex-shrink: 0;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--s3);
+  border: none;
+  color: var(--t2);
+  cursor: pointer;
+  font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .2s;
+}
+.btn-sc:hover { background: var(--s4); }
+.btn-sc.hidden { display: none; }
+
+/* 드롭다운 */
+.search-drop {
+  margin-top: 6px;
+  background: var(--s1);
+  border: 1px solid var(--bdm);
+  border-radius: var(--r);
+  overflow: hidden;
+  box-shadow: var(--shad);
+  max-height: 260px;
+  overflow-y: auto;
+  list-style: none;
+}
+.search-drop.hidden { display: none; }
+
+.search-drop li {
+  padding: 11px 16px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--bd);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  transition: background .15s;
+}
+.search-drop li:last-child { border-bottom: none; }
+.search-drop li:hover,
+.search-drop li:active { background: var(--s2); }
+.search-drop li.no-res {
+  padding: 16px;
+  color: var(--tmut);
+  font-size: 13px;
+  text-align: center;
+  cursor: default;
+  align-items: center;
+}
+.search-drop li.no-res:hover { background: transparent; }
+
+.res-name { font-size: 14px; font-weight: 600; color: var(--text); }
+.res-full {
+  font-size: 12px;
+  color: var(--tmut);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* ── 추가 모드 배너 ── */
 .add-banner {
   position: fixed;
