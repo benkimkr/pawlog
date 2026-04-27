@@ -1,328 +1,364 @@
 'use strict';
 
-// ── IndexedDB (video blob storage) ──────────────────────────────────────────
+// ── 카테고리 ──────────────────────────────────────────────────────────────────
+const CATS = {
+  food:     { label: '음식점', emoji: '🍽️', color: '#ff6b6b' },
+  cafe:     { label: '카페',   emoji: '☕',  color: '#ffa726' },
+  landmark: { label: '관광지', emoji: '🏛️', color: '#42a5f5' },
+  shopping: { label: '쇼핑',   emoji: '🛍️', color: '#ec407a' },
+  nature:   { label: '자연',   emoji: '🌿', color: '#66bb6a' },
+  other:    { label: '기타',   emoji: '📍', color: '#8b5cf6' },
+};
+
+// ── IndexedDB (동영상 blob) ───────────────────────────────────────────────────
 const videoDB = (() => {
   let db = null;
-
   const open = () => new Promise((res, rej) => {
-    const req = indexedDB.open('placelog_v1', 1);
+    const req = indexedDB.open('placelog_v2', 1);
     req.onupgradeneeded = e => e.target.result.createObjectStore('blobs');
     req.onsuccess = e => { db = e.target.result; res(); };
     req.onerror = () => rej(req.error);
   });
-
   const save = (id, blob) => new Promise((res, rej) => {
     const tx = db.transaction('blobs', 'readwrite');
     tx.objectStore('blobs').put(blob, id);
-    tx.oncomplete = res;
-    tx.onerror = () => rej(tx.error);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
-
   const get = id => new Promise((res, rej) => {
     const tx = db.transaction('blobs', 'readonly');
     const req = tx.objectStore('blobs').get(id);
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
+    req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error);
   });
-
   const remove = id => new Promise((res, rej) => {
     const tx = db.transaction('blobs', 'readwrite');
     tx.objectStore('blobs').delete(id);
-    tx.oncomplete = res;
-    tx.onerror = () => rej(tx.error);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
   });
-
   return { open, save, get, remove };
 })();
 
-// ── App State ────────────────────────────────────────────────────────────────
-let cards = [];
-let activeStep = 1;
-let activeTab = 'youtube';
-let mapData = null;        // { lat, lon, display_name, mapUrl }
-let pendingVideoFile = null;
-const mapState = {};       // cardId → 'media' | 'map'
+// ── 상태 ─────────────────────────────────────────────────────────────────────
+let map;
+let cards       = [];
+let markers     = {};     // id → L.Marker
+let addMode     = false;
+let tempMarker  = null;
+let tempLatLng  = null;
+let tempAddr    = '';
+let pendingFile = null;
+let activeId    = null;
+let addTab      = 'yt';
+let selCat      = 'other';
 
-// ── Bootstrap ────────────────────────────────────────────────────────────────
+// 드래그 시트
+let sheetDrag = false;
+let sheetStartY = 0;
+
+// ── 부트스트랩 ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await videoDB.open().catch(() => {});
   cards = loadCards();
-  renderFeed();
+  initMap();
+  renderAllPins();
+  buildCatPills();
   setupListeners();
+  updateBadge();
+  document.getElementById('add-date').value = today();
 });
 
-// ── Persistence ──────────────────────────────────────────────────────────────
-function loadCards() {
-  try { return JSON.parse(localStorage.getItem('placelog') || '[]'); }
-  catch { return []; }
-}
+// ── 지도 초기화 ───────────────────────────────────────────────────────────────
+function initMap() {
+  map = L.map('map', {
+    zoomControl: false,
+    attributionControl: true,
+    tap: false,
+  }).setView([37.5665, 126.9780], 12);
 
-function persistCards() {
-  localStorage.setItem('placelog', JSON.stringify(cards));
-}
+  // CartoDB Dark Matter 타일 (API 키 없음)
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19,
+  }).addTo(map);
 
-// ── Feed ─────────────────────────────────────────────────────────────────────
-function renderFeed() {
-  const feed = document.getElementById('feed');
-  const empty = document.getElementById('empty-state');
-
-  feed.querySelectorAll('.card').forEach(c => c.remove());
-
-  if (!cards.length) {
-    empty.style.display = '';
-    return;
+  // 사용자 위치로 초기 이동
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      p => map.setView([p.coords.latitude, p.coords.longitude], 14),
+      () => {}
+    );
   }
-  empty.style.display = 'none';
 
-  [...cards].reverse().forEach(card => feed.appendChild(buildCard(card)));
-  cards.forEach(c => { if (c.mediaType === 'video') loadVideoSrc(c.id); });
+  // 지도 클릭 → 핀 배치
+  map.on('click', e => { if (addMode) placeTempPin(e.latlng); });
+
+  // 줌 버튼
+  document.getElementById('btn-zoomin').onclick  = () => map.zoomIn();
+  document.getElementById('btn-zoomout').onclick = () => map.zoomOut();
 }
 
-function buildCard(card) {
-  const el = document.createElement('article');
-  el.className = 'card';
-  el.dataset.id = card.id;
-
-  const name = shortName(card.placeFullName || card.placeName);
-  const tagsHtml = (card.tags || [])
-    .map(t => `<span class="tag">${esc(t)}</span>`).join('');
-  const mapsHref = `https://maps.google.com/?q=${card.lat},${card.lon}`;
-
-  el.innerHTML = `
-    <div class="card-media">
-      <div id="mc-${card.id}">${buildMediaHtml(card)}</div>
-      <div class="card-overlay-top">
-        <div class="card-location">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-          </svg>
-          <span>${esc(name)}</span>
-        </div>
-        ${card.mediaType !== 'none'
-          ? `<button class="btn-toggle-map" onclick="toggleMap('${card.id}')">🗺️ 지도</button>`
-          : ''}
-      </div>
-    </div>
-    <div class="card-body">
-      ${card.caption ? `<p class="card-caption">${esc(card.caption)}</p>` : ''}
-      ${tagsHtml ? `<div class="card-tags">${tagsHtml}</div>` : ''}
-      <div class="card-footer">
-        <span class="card-date">${fmtDate(card.createdAt)}</span>
-        <div class="card-footer-right">
-          <a class="btn-icon-sm" href="${mapsHref}" target="_blank" rel="noopener" title="구글맵에서 보기">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z"/>
-            </svg>
-          </a>
-          <button class="btn-icon-sm" onclick="shareCard('${card.id}')" title="공유">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
-            </svg>
-          </button>
-          <button class="btn-icon-sm danger" onclick="deleteCard('${card.id}')" title="삭제">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-    </div>`;
-
-  return el;
+// ── 핀 아이콘 ─────────────────────────────────────────────────────────────────
+function makeIcon(cat, active = false) {
+  const c = CATS[cat] || CATS.other;
+  return L.divIcon({
+    html: `<div class="map-pin${active ? ' is-active' : ''}" style="--pc:${c.color}">
+             <div class="pin-bub"><span class="pin-emoji">${c.emoji}</span></div>
+           </div>`,
+    className: '',
+    iconSize:   [38, 30],
+    iconAnchor: [19, 30],
+    popupAnchor: [0, -32],
+  });
 }
 
-function buildMediaHtml(card) {
-  switch (card.mediaType) {
-    case 'youtube':
-      return `<iframe src="https://www.youtube.com/embed/${card.mediaId}?rel=0"
-                frameborder="0" allowfullscreen
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture">
-              </iframe>`;
-    case 'instagram':
-      return `<iframe class="ig"
-                src="https://www.instagram.com/${card.igType || 'p'}/${card.mediaId}/embed/"
-                frameborder="0" scrolling="no" allowtransparency="true">
-              </iframe>`;
-    case 'video':
-      return `<video data-vid="${card.id}" controls playsinline preload="metadata"></video>`;
-    default:
-      return `<iframe src="${esc(card.mapUrl)}" frameborder="0"
-                style="border:0;width:100%;height:100%" loading="lazy">
-              </iframe>`;
-  }
+function makeTempIcon() {
+  return L.divIcon({
+    html: `<div class="map-pin pin-temp" style="--pc:#8b5cf6">
+             <div class="pin-bub"><span class="pin-emoji">📍</span></div>
+           </div>`,
+    className: '',
+    iconSize:   [38, 30],
+    iconAnchor: [19, 30],
+  });
 }
 
-async function loadVideoSrc(cardId) {
-  const vid = document.querySelector(`video[data-vid="${cardId}"]`);
-  if (!vid || vid.src) return;
-  const blob = await videoDB.get(cardId).catch(() => null);
-  if (blob) vid.src = URL.createObjectURL(blob);
+// ── 핀 렌더링 ─────────────────────────────────────────────────────────────────
+function renderAllPins() {
+  cards.forEach(addPin);
 }
 
-// ── Map Toggle ────────────────────────────────────────────────────────────────
-function toggleMap(cardId) {
-  const card = cards.find(c => c.id === cardId);
-  if (!card) return;
-
-  const mc  = document.getElementById(`mc-${cardId}`);
-  const btn = mc.closest('.card-media').querySelector('.btn-toggle-map');
-
-  if (mapState[cardId] === 'map') {
-    mc.innerHTML = buildMediaHtml(card);
-    if (card.mediaType === 'video') loadVideoSrc(cardId);
-    mapState[cardId] = 'media';
-    btn.innerHTML = '🗺️ 지도';
-  } else {
-    mc.innerHTML = `<iframe src="${esc(card.mapUrl)}" frameborder="0"
-                      style="border:0;width:100%;height:100%" loading="lazy"></iframe>`;
-    mapState[cardId] = 'map';
-    btn.innerHTML = '▶️ 미디어';
-  }
+function addPin(card) {
+  const m = L.marker([card.lat, card.lon], { icon: makeIcon(card.category) }).addTo(map);
+  m.on('click', () => openViewSheet(card.id));
+  markers[card.id] = m;
 }
 
-// ── Modal ─────────────────────────────────────────────────────────────────────
-function openCreateModal() {
-  resetDraft();
-  document.getElementById('create-overlay').classList.remove('hidden');
-  document.body.style.overflow = 'hidden';
-  setTimeout(() => document.getElementById('place-input').focus(), 350);
+function removePin(id) {
+  if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
 }
 
-function closeCreateModal() {
-  document.getElementById('create-overlay').classList.add('hidden');
-  document.body.style.overflow = '';
-  resetDraft();
+// ── 추가 모드 ─────────────────────────────────────────────────────────────────
+function onFabClick() { addMode ? cancelAddMode() : startAddMode(); }
+
+function startAddMode() {
+  addMode = true;
+  document.getElementById('add-banner').classList.remove('hidden');
+  document.getElementById('btn-fab').classList.add('is-cancel');
+  document.getElementById('fab-plus').classList.add('hidden');
+  document.getElementById('fab-x').classList.remove('hidden');
+  document.getElementById('map').classList.add('add-mode');
+  closeSheet();
 }
 
-function resetDraft() {
-  mapData = null;
-  pendingVideoFile = null;
-
-  // Step 1
-  document.getElementById('place-input').value = '';
-  document.getElementById('map-iframe').src = '';
-  document.getElementById('map-iframe').style.display = 'none';
-  document.getElementById('map-placeholder').style.cssText = '';
-  document.getElementById('map-placeholder').innerHTML = `
-    <svg width="40" height="40" viewBox="0 0 24 24" fill="var(--text-muted)">
-      <path d="M20.5 3l-.16.03L15 5.1 9 3 3.36 4.9c-.21.07-.36.25-.36.48V20.5c0 .28.22.5.5.5l.16-.03L9 18.9l6 2.1 5.64-1.9c.21-.07.36-.25.36-.48V3.5c0-.28-.22-.5-.5-.5zM15 19l-6-2.11V5l6 2.11V19z"/>
-    </svg>
-    <p>장소를 검색하면 지도가 표시됩니다</p>`;
-  document.getElementById('place-name-hint').textContent = '';
-  document.getElementById('btn-next-1').disabled = true;
-  setBtnSearchIcon();
-
-  // Step 2
-  document.getElementById('youtube-url').value = '';
-  document.getElementById('instagram-url').value = '';
-  document.getElementById('yt-preview').innerHTML = '';
-  document.getElementById('ig-preview').innerHTML = '';
-  document.getElementById('upload-preview').innerHTML = '';
-  document.getElementById('upload-zone').style.display = '';
-
-  // Step 3
-  document.getElementById('caption').value = '';
-  document.getElementById('tags-input').value = '';
-
-  // Reset tabs to youtube
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === 'youtube'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'panel-youtube'));
-  activeTab = 'youtube';
-
-  // Go to step 1 (hide current step if different)
-  document.querySelectorAll('.step').forEach(s => s.classList.add('hidden'));
-  document.getElementById('step-1').classList.remove('hidden');
-  document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i === 0));
-  activeStep = 1;
+function cancelAddMode() {
+  addMode = false;
+  document.getElementById('add-banner').classList.add('hidden');
+  document.getElementById('btn-fab').classList.remove('is-cancel');
+  document.getElementById('fab-plus').classList.remove('hidden');
+  document.getElementById('fab-x').classList.add('hidden');
+  document.getElementById('map').classList.remove('add-mode');
+  clearTempPin();
+  closeSheet();
 }
 
-function goStepBack() {
-  if (activeStep > 1) goStep(activeStep - 1);
-  else closeCreateModal();
+function clearTempPin() {
+  if (tempMarker) { map.removeLayer(tempMarker); tempMarker = null; }
+  tempLatLng = null;
+  tempAddr = '';
 }
 
-function goStep(n) {
-  document.getElementById(`step-${activeStep}`).classList.add('hidden');
-  document.getElementById(`step-${n}`).classList.remove('hidden');
-  document.querySelectorAll('.dot').forEach((d, i) => d.classList.toggle('active', i + 1 === n));
-  if (n === 3) populateStep3();
-  activeStep = n;
+// ── 핀 배치 + 역지오코딩 ──────────────────────────────────────────────────────
+function placeTempPin(latlng) {
+  clearTempPin();
+  tempLatLng = latlng;
+
+  tempMarker = L.marker(latlng, {
+    icon: makeTempIcon(),
+    draggable: true,
+    zIndexOffset: 1000,
+  }).addTo(map);
+
+  tempMarker.on('dragend', e => {
+    tempLatLng = e.target.getLatLng();
+    reverseGeocode(tempLatLng.lat, tempLatLng.lng);
+  });
+
+  openAddSheet();
+  reverseGeocode(latlng.lat, latlng.lng);
+
+  // 핀이 시트 뒤에 안 가리도록 살짝 위로
+  setTimeout(() => map.panBy([0, 80], { animate: true, duration: 0.3 }), 100);
 }
 
-function populateStep3() {
-  if (!mapData) return;
-  const name = shortName(mapData.display_name);
-  document.getElementById('mini-name').textContent = name;
-  document.getElementById('mini-full').textContent = mapData.display_name;
-  document.getElementById('mini-map').innerHTML =
-    `<iframe src="${esc(mapData.mapUrl)}" loading="lazy" style="border:none"></iframe>`;
-}
+async function reverseGeocode(lat, lon) {
+  const nameEl = document.getElementById('add-name');
+  const addrEl = document.getElementById('add-addr');
 
-// ── Place Search ──────────────────────────────────────────────────────────────
-async function searchPlace() {
-  const q = document.getElementById('place-input').value.trim();
-  if (!q) return;
-
-  const ph      = document.getElementById('map-placeholder');
-  const iframe  = document.getElementById('map-iframe');
-  const hint    = document.getElementById('place-name-hint');
-  const btnNext = document.getElementById('btn-next-1');
-
-  iframe.style.display = 'none';
-  ph.style.cssText = '';
-  ph.innerHTML = `<div class="spinner"></div><p>검색 중...</p>`;
-  hint.textContent = '';
-  btnNext.disabled = true;
-  mapData = null;
+  addrEl.textContent = '주소 불러오는 중...';
 
   try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1`,
+    const r = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`,
       { headers: { 'Accept-Language': 'ko,en' } }
     );
-    const data = await res.json();
-
-    if (!data.length) {
-      ph.innerHTML = `<svg width="32" height="32" viewBox="0 0 24 24" fill="var(--text-muted)"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg><p style="color:var(--text-muted)">찾을 수 없어요<br>다른 이름으로 검색해보세요</p>`;
-      setBtnSearchIcon();
-      return;
+    const d = await r.json();
+    if (d.display_name) {
+      tempAddr = d.display_name;
+      addrEl.textContent = d.display_name;
+      if (!nameEl.value) nameEl.value = shortName(d.display_name);
     }
-
-    const { lat, lon, display_name } = data[0];
-    const d = 0.007;
-    const bbox = `${+lon - d},${+lat - d},${+lon + d},${+lat + d}`;
-    const mapUrl = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat},${lon}`;
-
-    mapData = { lat, lon, display_name, mapUrl };
-
-    ph.style.display = 'none';
-    iframe.src = mapUrl;
-    iframe.style.display = 'block';
-    hint.textContent = display_name;
-    btnNext.disabled = false;
-
   } catch {
-    ph.innerHTML = `<p style="color:var(--text-muted);font-size:13px">검색 중 오류가 발생했어요</p>`;
+    addrEl.textContent = '';
   }
-
-  setBtnSearchIcon();
 }
 
-function setBtnSearchIcon() {
-  document.getElementById('btn-search').innerHTML =
-    `<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-       <path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-     </svg>`;
+// ── 바텀시트 ─────────────────────────────────────────────────────────────────
+function openViewSheet(id) {
+  activeId = id;
+  populateView(id);
+  showPanel('p-view');
+  openSheet();
+
+  // 활성 핀 강조
+  Object.keys(markers).forEach(k => {
+    const c = cards.find(c => c.id === k);
+    if (c) markers[k].setIcon(makeIcon(c.category, k === id));
+  });
+
+  // 핀 위로 지도 이동
+  const card = cards.find(c => c.id === id);
+  if (card) {
+    map.panTo([card.lat, card.lon], { animate: true, duration: 0.3 });
+    setTimeout(() => map.panBy([0, 100], { animate: true, duration: 0.25 }), 350);
+  }
 }
 
-// ── Media Tabs ────────────────────────────────────────────────────────────────
-function switchTab(tab) {
-  activeTab = tab;
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== `panel-${tab}`));
+function openAddSheet() {
+  resetAddForm();
+  showPanel('p-add');
+  openSheet();
 }
 
-// ── YouTube ───────────────────────────────────────────────────────────────────
+function showPanel(id) {
+  document.querySelectorAll('.s-panel').forEach(p => p.classList.toggle('hidden', p.id !== id));
+}
+
+function openSheet() {
+  const sheet = document.getElementById('sheet');
+  sheet.classList.add('is-open');
+  liftMapControls(true);
+  setTimeout(() => map.invalidateSize(), 360);
+}
+
+function closeSheet() {
+  const sheet = document.getElementById('sheet');
+  sheet.classList.remove('is-open');
+  liftMapControls(false);
+
+  // 활성 핀 강조 해제
+  if (activeId) {
+    const c = cards.find(c => c.id === activeId);
+    if (c && markers[activeId]) markers[activeId].setIcon(makeIcon(c.category, false));
+    activeId = null;
+  }
+  setTimeout(() => map.invalidateSize(), 360);
+}
+
+function liftMapControls(up) {
+  const sheet = document.getElementById('sheet');
+  const h = up ? sheet.offsetHeight : 0;
+  document.documentElement.style.setProperty('--sheet-h', `${h}px`);
+  document.querySelector('.zoom-ctrl').classList.toggle('lifted', up);
+  document.querySelector('.btn-myloc').classList.toggle('lifted', up);
+}
+
+// ── 뷰 패널 채우기 ────────────────────────────────────────────────────────────
+async function populateView(id) {
+  const card = cards.find(c => c.id === id);
+  if (!card) return;
+
+  const cat = CATS[card.category] || CATS.other;
+
+  const catEl = document.getElementById('sv-cat');
+  catEl.textContent = `${cat.emoji} ${cat.label}`;
+  catEl.style.color = cat.color;
+
+  document.getElementById('sv-name').textContent = card.name;
+  document.getElementById('sv-addr').textContent = card.address || '';
+  document.getElementById('sv-date').textContent = card.date ? `📅 ${card.date}` : '';
+  document.getElementById('sv-memo').textContent = card.memo || '';
+  document.getElementById('sv-maplink').href =
+    `https://maps.google.com/?q=${card.lat},${card.lon}`;
+
+  const mediaEl = document.getElementById('sv-media');
+  mediaEl.innerHTML = '';
+
+  if (card.mediaType === 'youtube' && card.mediaId) {
+    mediaEl.innerHTML =
+      `<iframe src="https://www.youtube.com/embed/${card.mediaId}?rel=0"
+               frameborder="0" allowfullscreen
+               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture">
+       </iframe>`;
+  } else if (card.mediaType === 'video') {
+    const vid = document.createElement('video');
+    vid.controls = vid.playsInline = true;
+    vid.preload = 'metadata';
+    mediaEl.appendChild(vid);
+    const blob = await videoDB.get(id).catch(() => null);
+    if (blob) vid.src = URL.createObjectURL(blob);
+  }
+}
+
+// ── 추가 폼 ───────────────────────────────────────────────────────────────────
+function resetAddForm() {
+  document.getElementById('add-name').value = '';
+  document.getElementById('add-addr').textContent = '';
+  document.getElementById('add-yt').value = '';
+  document.getElementById('yt-prev').innerHTML = '';
+  document.getElementById('file-prev').innerHTML = '';
+  document.getElementById('cam-prev').innerHTML = '';
+  document.getElementById('s-upzone').style.display = '';
+  document.getElementById('add-memo').value = '';
+  document.getElementById('add-date').value = today();
+  pendingFile = null;
+  selCat = 'other';
+  switchAddTab('yt');
+  document.querySelectorAll('.cat-pill').forEach(p =>
+    p.classList.toggle('active', p.dataset.cat === 'other')
+  );
+}
+
+function cancelAdd() {
+  clearTempPin();
+  closeSheet();
+}
+
+// ── 카테고리 필 ───────────────────────────────────────────────────────────────
+function buildCatPills() {
+  const wrap = document.getElementById('cat-pills');
+  Object.entries(CATS).forEach(([key, c]) => {
+    const btn = document.createElement('button');
+    btn.className = `cat-pill${key === 'other' ? ' active' : ''}`;
+    btn.dataset.cat = key;
+    btn.textContent = `${c.emoji} ${c.label}`;
+    btn.onclick = () => {
+      selCat = key;
+      document.querySelectorAll('.cat-pill').forEach(p =>
+        p.classList.toggle('active', p.dataset.cat === key)
+      );
+    };
+    wrap.appendChild(btn);
+  });
+}
+
+// ── 미디어 탭 ─────────────────────────────────────────────────────────────────
+function switchAddTab(tab) {
+  addTab = tab;
+  document.querySelectorAll('.s-tab').forEach(t => t.classList.toggle('active', t.dataset.stab === tab));
+  document.querySelectorAll('.s-tabp').forEach(p => p.classList.toggle('hidden', p.id !== `sp-${tab}`));
+}
+
+// ── YouTube 파싱 ─────────────────────────────────────────────────────────────
 function parseYtId(url) {
   try {
     const u = new URL(url);
@@ -336,217 +372,244 @@ function parseYtId(url) {
   return null;
 }
 
-function previewYoutube() {
-  const id = parseYtId(document.getElementById('youtube-url').value.trim());
-  document.getElementById('yt-preview').innerHTML = id
+function previewYt() {
+  const id = parseYtId(document.getElementById('add-yt').value.trim());
+  document.getElementById('yt-prev').innerHTML = id
     ? `<iframe src="https://www.youtube.com/embed/${id}?rel=0" frameborder="0" allowfullscreen
                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture">
        </iframe>`
     : '';
 }
 
-// ── Instagram ─────────────────────────────────────────────────────────────────
-function parseIgInfo(url) {
-  try {
-    const u = new URL(url);
-    if (!u.hostname.includes('instagram.com')) return null;
-    const parts = u.pathname.split('/').filter(Boolean);
-    if (parts.length >= 2 && (parts[0] === 'p' || parts[0] === 'reel'))
-      return { type: parts[0], id: parts[1] };
-  } catch {}
-  return null;
-}
-
-function previewInstagram() {
-  const info = parseIgInfo(document.getElementById('instagram-url').value.trim());
-  document.getElementById('ig-preview').innerHTML = info
-    ? `<iframe class="ig"
-               src="https://www.instagram.com/${info.type}/${info.id}/embed/"
-               frameborder="0" scrolling="no" allowtransparency="true">
-       </iframe>`
-    : '';
-}
-
-// ── Video Upload ──────────────────────────────────────────────────────────────
-function handleFile(file) {
+// ── 파일 처리 ─────────────────────────────────────────────────────────────────
+function handleFile(file, prevId, zoneId) {
   if (!file?.type.startsWith('video/')) { toast('동영상 파일만 업로드할 수 있어요'); return; }
   if (file.size > 200 * 1024 * 1024)   { toast('200MB 이하 파일만 업로드 가능해요'); return; }
 
-  pendingVideoFile = file;
+  pendingFile = file;
   const src = URL.createObjectURL(file);
+  const zone = document.getElementById(zoneId);
+  const prev = document.getElementById(prevId);
+  if (zone) zone.style.display = 'none';
 
-  document.getElementById('upload-zone').style.display = 'none';
-  document.getElementById('upload-preview').innerHTML = `
-    <div class="upload-done">
+  prev.innerHTML = `
+    <div class="upl-done">
       <video src="${src}" controls playsinline preload="metadata"></video>
-      <div class="upload-meta">${esc(file.name)} (${(file.size / 1024 / 1024).toFixed(1)} MB)</div>
-      <button class="btn-clear-upload" onclick="clearUpload()">✕</button>
+      <div class="upl-meta">${esc(file.name)} · ${(file.size/1024/1024).toFixed(1)} MB</div>
+      <button class="btn-clr" onclick="clearFile('${prevId}','${zoneId}')">✕</button>
     </div>`;
 }
 
-function clearUpload() {
-  pendingVideoFile = null;
-  document.getElementById('upload-preview').innerHTML = '';
-  document.getElementById('upload-zone').style.display = '';
+function clearFile(prevId, zoneId) {
+  pendingFile = null;
+  document.getElementById(prevId).innerHTML = '';
+  const zone = document.getElementById(zoneId);
+  if (zone) zone.style.display = '';
 }
 
-// ── Save ──────────────────────────────────────────────────────────────────────
+// ── 저장 ─────────────────────────────────────────────────────────────────────
 async function saveCard() {
-  if (!mapData) { toast('장소를 먼저 선택해주세요'); return; }
+  const name = document.getElementById('add-name').value.trim();
+  if (!name)       { toast('장소명을 입력해주세요'); return; }
+  if (!tempLatLng) { toast('지도를 탭해서 위치를 선택해주세요'); return; }
 
   const btn = document.getElementById('btn-save');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>';
+  btn.innerHTML = '<span class="spin"></span>';
 
-  const caption = document.getElementById('caption').value.trim();
-  const rawTags = document.getElementById('tags-input').value.trim();
-  const tags = rawTags
-    ? rawTags.split(/[\s,，]+/).map(t => t.replace(/^#+/, '').trim()).filter(Boolean).map(t => '#' + t)
-    : [];
+  let mediaType = null, mediaId = null;
 
-  let mediaType = 'none', mediaId = null, igType = null;
-
-  const ytId  = parseYtId(document.getElementById('youtube-url').value);
-  const igInfo = parseIgInfo(document.getElementById('instagram-url').value);
-
-  if (activeTab === 'youtube'   && ytId)           { mediaType = 'youtube';   mediaId = ytId; }
-  else if (activeTab === 'instagram' && igInfo)    { mediaType = 'instagram'; mediaId = igInfo.id; igType = igInfo.type; }
-  else if (activeTab === 'upload'    && pendingVideoFile) { mediaType = 'video'; }
+  if (addTab === 'yt') {
+    const id = parseYtId(document.getElementById('add-yt').value);
+    if (id) { mediaType = 'youtube'; mediaId = id; }
+  } else if (pendingFile) {
+    mediaType = 'video';
+  }
 
   const id = uid();
   const card = {
     id,
-    placeName:     shortName(mapData.display_name),
-    placeFullName: mapData.display_name,
-    lat:      mapData.lat,
-    lon:      mapData.lon,
-    mapUrl:   mapData.mapUrl,
-    mediaType, mediaId, igType,
-    caption, tags,
-    createdAt: new Date().toISOString()
+    name,
+    address:   tempAddr,
+    category:  selCat,
+    lat:       tempLatLng.lat,
+    lon:       tempLatLng.lng,
+    mediaType,
+    mediaId,
+    date:      document.getElementById('add-date').value,
+    memo:      document.getElementById('add-memo').value.trim(),
+    createdAt: new Date().toISOString(),
   };
 
-  if (mediaType === 'video' && pendingVideoFile) {
-    await videoDB.save(id, pendingVideoFile).catch(() => {});
+  if (mediaType === 'video' && pendingFile) {
+    await videoDB.save(id, pendingFile).catch(() => {});
   }
 
   cards.push(card);
   persistCards();
-  renderFeed();
-  closeCreateModal();
-  toast('장소가 저장됐어요 📍');
+  addPin(card);
+  updateBadge();
 
-  if (mediaType === 'video') setTimeout(() => loadVideoSrc(id), 200);
+  // 임시 핀 제거
+  clearTempPin();
+  cancelAddMode();
+  closeSheet();
+  toast(`${name} 저장됐어요 📍`);
 }
 
-// ── Delete ────────────────────────────────────────────────────────────────────
-async function deleteCard(id) {
-  if (!confirm('이 기록을 삭제할까요?')) return;
-  const card = cards.find(c => c.id === id);
-  if (card?.mediaType === 'video') await videoDB.remove(id).catch(() => {});
-  cards = cards.filter(c => c.id !== id);
+// ── 삭제 ─────────────────────────────────────────────────────────────────────
+async function deleteActive() {
+  if (!activeId) return;
+  const card = cards.find(c => c.id === activeId);
+  if (!card) return;
+  if (!confirm(`"${card.name}" 을(를) 삭제할까요?`)) return;
+
+  if (card.mediaType === 'video') await videoDB.remove(activeId).catch(() => {});
+  removePin(activeId);
+  cards = cards.filter(c => c.id !== activeId);
   persistCards();
-  renderFeed();
+  updateBadge();
+  closeSheet();
   toast('삭제됐어요');
 }
 
-// ── Share ─────────────────────────────────────────────────────────────────────
-async function shareCard(id) {
-  const card = cards.find(c => c.id === id);
+// ── 공유 ─────────────────────────────────────────────────────────────────────
+async function shareActive() {
+  const card = cards.find(c => c.id === activeId);
   if (!card) return;
 
-  const name = shortName(card.placeFullName || card.placeName);
-  const tags = (card.tags || []).join(' ');
-  const mapsUrl = `https://maps.google.com/?q=${card.lat},${card.lon}`;
+  const cat = CATS[card.category] || CATS.other;
   const text = [
-    `📍 ${name}`,
-    card.caption,
-    tags,
-    `🗺️ ${mapsUrl}`,
+    `${cat.emoji} ${card.name}`,
+    card.address,
+    card.memo,
+    `🗺️ https://maps.google.com/?q=${card.lat},${card.lon}`,
     '',
-    'PLACELOG으로 기록됨'
+    'PLACELOG으로 기록됨',
   ].filter(Boolean).join('\n');
 
   if (navigator.share) {
-    try { await navigator.share({ title: `PLACELOG — ${name}`, text }); return; }
+    try { await navigator.share({ title: card.name, text }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
   }
-
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('클립보드에 복사됐어요 ✓');
-  } catch {
-    toast('공유 기능을 사용할 수 없어요');
-  }
+  await navigator.clipboard.writeText(text).catch(() => {});
+  toast('클립보드에 복사됐어요 ✓');
 }
 
-// ── Listeners ─────────────────────────────────────────────────────────────────
+// ── 내 위치 ───────────────────────────────────────────────────────────────────
+function goMyLocation() {
+  if (!navigator.geolocation) { toast('위치 권한이 필요해요'); return; }
+  navigator.geolocation.getCurrentPosition(
+    p => map.setView([p.coords.latitude, p.coords.longitude], 15, { animate: true }),
+    () => toast('위치를 가져올 수 없어요')
+  );
+}
+
+// ── 이벤트 리스너 ─────────────────────────────────────────────────────────────
 function setupListeners() {
-  // Enter on place search
-  document.getElementById('place-input').addEventListener('keydown', e => {
-    if (e.key === 'Enter') searchPlace();
+  // YouTube 실시간 미리보기
+  const ytEl = document.getElementById('add-yt');
+  ytEl.addEventListener('input', debounce(previewYt, 600));
+  ytEl.addEventListener('paste', () => setTimeout(previewYt, 80));
+
+  // 파일 업로드
+  document.getElementById('file-inp').addEventListener('change', e => {
+    if (e.target.files[0]) handleFile(e.target.files[0], 'file-prev', 's-upzone');
   });
 
-  // YouTube live preview
-  const ytEl = document.getElementById('youtube-url');
-  ytEl.addEventListener('input',  debounce(previewYoutube, 600));
-  ytEl.addEventListener('paste',  () => setTimeout(previewYoutube, 80));
+  // 업로드 존 클릭
+  document.getElementById('s-upzone').addEventListener('click', () =>
+    document.getElementById('file-inp').click()
+  );
 
-  // Instagram live preview
-  const igEl = document.getElementById('instagram-url');
-  igEl.addEventListener('input',  debounce(previewInstagram, 600));
-  igEl.addEventListener('paste',  () => setTimeout(previewInstagram, 80));
-
-  // File picker
-  document.getElementById('file-input').addEventListener('change', e => {
-    if (e.target.files[0]) handleFile(e.target.files[0]);
-  });
-
-  // Upload zone click
-  const zone = document.getElementById('upload-zone');
-  zone.addEventListener('click', () => document.getElementById('file-input').click());
-
-  // Drag & drop
+  // 드래그&드롭
+  const zone = document.getElementById('s-upzone');
   zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
   zone.addEventListener('drop', e => {
     e.preventDefault();
     zone.classList.remove('drag-over');
-    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0], 'file-prev', 's-upzone');
   });
 
-  // Close on backdrop click
-  document.getElementById('create-overlay').addEventListener('click', e => {
-    if (e.target.id === 'create-overlay') closeCreateModal();
+  // 카메라
+  document.getElementById('cam-inp').addEventListener('change', e => {
+    if (e.target.files[0]) handleFile(e.target.files[0], 'cam-prev', null);
   });
 
-  // Escape key
+  // ESC → 시트 닫기
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape') closeCreateModal();
+    if (e.key === 'Escape') {
+      if (document.getElementById('sheet').classList.contains('is-open')) closeSheet();
+      else if (addMode) cancelAddMode();
+    }
   });
+
+  // 시트 드래그 (스와이프 다운으로 닫기)
+  setupSheetDrag();
 }
 
-// ── Utils ─────────────────────────────────────────────────────────────────────
+function setupSheetDrag() {
+  const dragEl = document.getElementById('sheet-drag');
+  const sheet  = document.getElementById('sheet');
+
+  const onStart = e => {
+    sheetStartY = (e.touches || [e])[0].clientY;
+    sheetDrag = true;
+    sheet.style.transition = 'none';
+  };
+  const onMove = e => {
+    if (!sheetDrag) return;
+    const dy = (e.touches || [e])[0].clientY - sheetStartY;
+    if (dy > 0) sheet.style.transform = `translateY(${dy}px)`;
+  };
+  const onEnd = e => {
+    if (!sheetDrag) return;
+    sheetDrag = false;
+    const dy = (e.changedTouches || [e])[0].clientY - sheetStartY;
+    sheet.style.transition = '';
+    sheet.style.transform = '';
+    if (dy > 90) closeSheet();
+  };
+
+  dragEl.addEventListener('touchstart', onStart, { passive: true });
+  dragEl.addEventListener('touchmove',  onMove,  { passive: true });
+  dragEl.addEventListener('touchend',   onEnd,   { passive: true });
+  dragEl.addEventListener('mousedown',  onStart);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup',   onEnd);
+}
+
+// ── localStorage ─────────────────────────────────────────────────────────────
+function loadCards() {
+  try { return JSON.parse(localStorage.getItem('placelog') || '[]'); }
+  catch { return []; }
+}
+function persistCards() {
+  localStorage.setItem('placelog', JSON.stringify(cards));
+}
+
+function updateBadge() {
+  document.getElementById('pin-badge').textContent = `${cards.length} 곳`;
+}
+
+// ── 유틸 ─────────────────────────────────────────────────────────────────────
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-function shortName(displayName) {
-  if (!displayName) return '알 수 없는 장소';
-  return displayName.split(',')[0].trim();
+function today() {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function fmtDate(iso) {
-  const d = new Date(iso);
-  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+function shortName(displayName) {
+  return (displayName || '').split(',')[0].trim() || '새 장소';
 }
 
 function esc(s) {
   return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function debounce(fn, ms) {
