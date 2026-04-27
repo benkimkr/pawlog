@@ -41,12 +41,6 @@ html, body {
   z-index: 0;
 }
 
-/* 카카오맵 저작권 영역 */
-.map_copyright,
-.kakao_map_copyright {
-  opacity: 0.55 !important;
-  font-size: 10px !important;
-}
 
 /* ── 헤더 HUD ── */
 .hud-header {
@@ -380,11 +374,6 @@ html, body {
 /* 지도 커서 (추가 모드) */
 #map.add-mode { cursor: crosshair !important; }
 
-/* 카카오맵 워터마크 숨김 */
-#map a[href*="kakao"],
-#map a[href*="daumcdn"],
-.map_logo,
-.link_logo_kakaomap { display: none !important; }
 
 /* ── 바텀시트 ── */
 .sheet {
