@@ -40,20 +40,24 @@ const videoDB = (() => {
 // ── 상태 ─────────────────────────────────────────────────────────────────────
 let map;
 let cards         = [];
-let markers       = {};     // id → L.Marker
+let markers       = {};    // id → kakao.maps.CustomOverlay
 let addMode       = false;
-let tempMarker    = null;
-let tempLatLng    = null;
+let tempMarker    = null;  // kakao.maps.CustomOverlay (임시 핀)
+let tempLatLng    = null;  // kakao.maps.LatLng
 let tempAddr      = '';
 let pendingFile   = null;
 let activeId      = null;
 let addTab        = 'yt';
 let selCat        = 'other';
-let searchResults = [];      // Nominatim 결과 캐시
+let searchResults = [];
 
 // 드래그 시트
-let sheetDrag = false;
+let sheetDrag  = false;
 let sheetStartY = 0;
+
+// 탭 / 피드
+let currentTab = 'map';
+let feedRegion = 'all';
 
 // ── 부트스트랩 ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
@@ -69,73 +73,68 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 // ── 지도 초기화 ───────────────────────────────────────────────────────────────
 function initMap() {
-  map = L.map('map', {
-    zoomControl: false,
-    attributionControl: true,
-    tap: false,
-  }).setView([37.5665, 126.9780], 12);
+  map = new kakao.maps.Map(document.getElementById('map'), {
+    center: new kakao.maps.LatLng(37.5665, 126.9780),
+    level: 6,
+  });
 
-  // CartoDB Voyager 타일 (API 키 없음)
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-    attribution: '© <a href="https://www.openstreetmap.org/copyright">OSM</a> © <a href="https://carto.com">CARTO</a>',
-    subdomains: 'abcd',
-    maxZoom: 19,
-  }).addTo(map);
-
-  // 사용자 위치로 초기 이동
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
-      p => map.setView([p.coords.latitude, p.coords.longitude], 14),
+      p => {
+        map.setCenter(new kakao.maps.LatLng(p.coords.latitude, p.coords.longitude));
+        map.setLevel(4);
+      },
       () => {}
     );
   }
 
-  // 지도 클릭 → 핀 배치
-  map.on('click', e => { if (addMode) placeTempPin(e.latlng); });
+  kakao.maps.event.addListener(map, 'click', e => {
+    if (addMode) placeTempPin(e.latLng);
+  });
 
-  // 줌 버튼
-  document.getElementById('btn-zoomin').onclick  = () => map.zoomIn();
-  document.getElementById('btn-zoomout').onclick = () => map.zoomOut();
+  document.getElementById('btn-zoomin').onclick  = () => map.setLevel(map.getLevel() - 1);
+  document.getElementById('btn-zoomout').onclick = () => map.setLevel(map.getLevel() + 1);
 }
 
-// ── 핀 아이콘 ─────────────────────────────────────────────────────────────────
-function makeIcon(cat, active = false) {
+// ── 오버레이 콘텐츠 생성 ──────────────────────────────────────────────────────
+function makeOverlayContent(cat, active, clickId) {
   const c = CATS[cat] || CATS.other;
-  return L.divIcon({
-    html: `<div class="map-pin${active ? ' is-active' : ''}" style="--pc:${c.color}">
-             <div class="pin-bub"><span class="pin-emoji">${c.emoji}</span></div>
-           </div>`,
-    className: '',
-    iconSize:   [38, 30],
-    iconAnchor: [19, 30],
-    popupAnchor: [0, -32],
-  });
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="map-pin${active ? ' is-active' : ''}" style="--pc:${c.color}">
+    <div class="pin-bub"><span class="pin-emoji">${c.emoji}</span></div>
+  </div>`;
+  const pin = wrap.firstChild;
+  if (clickId) pin.addEventListener('click', () => openViewSheet(clickId));
+  return pin;
 }
 
-function makeTempIcon() {
-  return L.divIcon({
-    html: `<div class="map-pin pin-temp" style="--pc:#8b5cf6">
-             <div class="pin-bub"><span class="pin-emoji">📍</span></div>
-           </div>`,
-    className: '',
-    iconSize:   [38, 30],
-    iconAnchor: [19, 30],
-  });
+function makeTempContent() {
+  const wrap = document.createElement('div');
+  wrap.innerHTML = `<div class="map-pin pin-temp" style="--pc:#8b5cf6;touch-action:none">
+    <div class="pin-bub"><span class="pin-emoji">📍</span></div>
+  </div>`;
+  return wrap.firstChild;
 }
 
 // ── 핀 렌더링 ─────────────────────────────────────────────────────────────────
-function renderAllPins() {
-  cards.forEach(addPin);
-}
+function renderAllPins() { cards.forEach(addPin); }
 
 function addPin(card) {
-  const m = L.marker([card.lat, card.lon], { icon: makeIcon(card.category) }).addTo(map);
-  m.on('click', () => openViewSheet(card.id));
-  markers[card.id] = m;
+  const content = makeOverlayContent(card.category, false, card.id);
+  const overlay = new kakao.maps.CustomOverlay({
+    position: new kakao.maps.LatLng(card.lat, card.lon),
+    content,
+    xAnchor: 0.5,
+    yAnchor:  1,
+    clickable: true,
+    zIndex:    1,
+  });
+  overlay.setMap(map);
+  markers[card.id] = overlay;
 }
 
 function removePin(id) {
-  if (markers[id]) { map.removeLayer(markers[id]); delete markers[id]; }
+  if (markers[id]) { markers[id].setMap(null); delete markers[id]; }
 }
 
 // ── 추가 모드 ─────────────────────────────────────────────────────────────────
@@ -148,7 +147,6 @@ function startAddMode() {
   document.getElementById('fab-plus').classList.add('hidden');
   document.getElementById('fab-x').classList.remove('hidden');
   document.getElementById('map').classList.add('add-mode');
-  // 배너와 겹치지 않도록 검색바 숨김
   document.getElementById('search-wrap').classList.add('hidden');
   clearSearch();
   closeSheet();
@@ -167,9 +165,9 @@ function cancelAddMode() {
 }
 
 function clearTempPin() {
-  if (tempMarker) { map.removeLayer(tempMarker); tempMarker = null; }
+  if (tempMarker) { tempMarker.setMap(null); tempMarker = null; }
   tempLatLng = null;
-  tempAddr = '';
+  tempAddr   = '';
 }
 
 // ── 핀 배치 + 역지오코딩 ──────────────────────────────────────────────────────
@@ -177,44 +175,69 @@ function placeTempPin(latlng) {
   clearTempPin();
   tempLatLng = latlng;
 
-  tempMarker = L.marker(latlng, {
-    icon: makeTempIcon(),
-    draggable: true,
-    zIndexOffset: 1000,
-  }).addTo(map);
-
-  tempMarker.on('dragend', e => {
-    tempLatLng = e.target.getLatLng();
-    reverseGeocode(tempLatLng.lat, tempLatLng.lng);
+  const content = makeTempContent();
+  tempMarker = new kakao.maps.CustomOverlay({
+    position: latlng,
+    content,
+    xAnchor:  0.5,
+    yAnchor:  1,
+    clickable: true,
+    zIndex:   10,
   });
+  tempMarker.setMap(map);
+  setupTempPinDrag(content, tempMarker);
 
   openAddSheet();
-  reverseGeocode(latlng.lat, latlng.lng);
-
-  // 핀이 시트 뒤에 안 가리도록 살짝 위로
-  setTimeout(() => map.panBy([0, 80], { animate: true, duration: 0.3 }), 100);
+  reverseGeocode(latlng.getLat(), latlng.getLng());
+  setTimeout(() => map.panBy(0, 80), 100);
 }
 
-async function reverseGeocode(lat, lon) {
+// 임시 핀 드래그 (pointer events → map.getProjection() 변환)
+function setupTempPinDrag(el, overlay) {
+  let dragging = false;
+
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    dragging = true;
+    el.setPointerCapture(e.pointerId);
+    map.setDraggable(false);
+  }, { passive: false });
+
+  el.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    const rect = document.getElementById('map').getBoundingClientRect();
+    const pt   = new kakao.maps.Point(e.clientX - rect.left, e.clientY - rect.top);
+    const pos  = map.getProjection().coordsFromContainerPoint(pt);
+    overlay.setPosition(pos);
+    tempLatLng = pos;
+  });
+
+  el.addEventListener('pointerup', () => {
+    if (!dragging) return;
+    dragging = false;
+    map.setDraggable(true);
+    reverseGeocode(tempLatLng.getLat(), tempLatLng.getLng());
+  });
+}
+
+// 카카오 역지오코딩
+function reverseGeocode(lat, lon) {
   const nameEl = document.getElementById('add-name');
   const addrEl = document.getElementById('add-addr');
-
   addrEl.textContent = '주소 불러오는 중...';
 
-  try {
-    const r = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`,
-      { headers: { 'Accept-Language': 'ko,en' } }
-    );
-    const d = await r.json();
-    if (d.display_name) {
-      tempAddr = d.display_name;
-      addrEl.textContent = d.display_name;
-      if (!nameEl.value) nameEl.value = shortName(d.display_name);
+  const geocoder = new kakao.maps.services.Geocoder();
+  geocoder.coord2Address(lon, lat, (result, status) => {
+    if (status === kakao.maps.services.Status.OK) {
+      const r    = result[0];
+      const addr = r.road_address?.address_name || r.address.address_name;
+      tempAddr = addr;
+      addrEl.textContent = addr;
+      if (!nameEl.value) nameEl.value = shortName(addr);
+    } else {
+      addrEl.textContent = '';
     }
-  } catch {
-    addrEl.textContent = '';
-  }
+  });
 }
 
 // ── 바텀시트 ─────────────────────────────────────────────────────────────────
@@ -227,14 +250,13 @@ function openViewSheet(id) {
   // 활성 핀 강조
   Object.keys(markers).forEach(k => {
     const c = cards.find(c => c.id === k);
-    if (c) markers[k].setIcon(makeIcon(c.category, k === id));
+    if (c) markers[k].setContent(makeOverlayContent(c.category, k === id, c.id));
   });
 
-  // 핀 위로 지도 이동
   const card = cards.find(c => c.id === id);
   if (card) {
-    map.panTo([card.lat, card.lon], { animate: true, duration: 0.3 });
-    setTimeout(() => map.panBy([0, 100], { animate: true, duration: 0.25 }), 350);
+    map.panTo(new kakao.maps.LatLng(card.lat, card.lon));
+    setTimeout(() => map.panBy(0, 100), 350);
   }
 }
 
@@ -249,29 +271,25 @@ function showPanel(id) {
 }
 
 function openSheet() {
-  const sheet = document.getElementById('sheet');
-  sheet.classList.add('is-open');
+  document.getElementById('sheet').classList.add('is-open');
   liftMapControls(true);
-  setTimeout(() => map.invalidateSize(), 360);
+  setTimeout(() => map && map.relayout(), 360);
 }
 
 function closeSheet() {
-  const sheet = document.getElementById('sheet');
-  sheet.classList.remove('is-open');
+  document.getElementById('sheet').classList.remove('is-open');
   liftMapControls(false);
 
-  // 활성 핀 강조 해제
   if (activeId) {
     const c = cards.find(c => c.id === activeId);
-    if (c && markers[activeId]) markers[activeId].setIcon(makeIcon(c.category, false));
+    if (c && markers[activeId]) markers[activeId].setContent(makeOverlayContent(c.category, false, c.id));
     activeId = null;
   }
-  setTimeout(() => map.invalidateSize(), 360);
+  setTimeout(() => map && map.relayout(), 360);
 }
 
 function liftMapControls(up) {
-  const sheet = document.getElementById('sheet');
-  const h = up ? sheet.offsetHeight : 0;
+  const h = up ? document.getElementById('sheet').offsetHeight : 0;
   document.documentElement.style.setProperty('--sheet-h', `${h}px`);
   document.querySelector('.zoom-ctrl').classList.toggle('lifted', up);
   document.querySelector('.btn-myloc').classList.toggle('lifted', up);
@@ -283,7 +301,6 @@ async function populateView(id) {
   if (!card) return;
 
   const cat = CATS[card.category] || CATS.other;
-
   const catEl = document.getElementById('sv-cat');
   catEl.textContent = `${cat.emoji} ${cat.label}`;
   catEl.style.color = cat.color;
@@ -292,8 +309,7 @@ async function populateView(id) {
   document.getElementById('sv-addr').textContent = card.address || '';
   document.getElementById('sv-date').textContent = card.date ? `📅 ${card.date}` : '';
   document.getElementById('sv-memo').textContent = card.memo || '';
-  document.getElementById('sv-maplink').href =
-    `https://maps.google.com/?q=${card.lat},${card.lon}`;
+  document.getElementById('sv-maplink').href = `https://maps.google.com/?q=${card.lat},${card.lon}`;
 
   const mediaEl = document.getElementById('sv-media');
   mediaEl.innerHTML = '';
@@ -392,7 +408,7 @@ function handleFile(file, prevId, zoneId) {
   if (file.size > 200 * 1024 * 1024)   { toast('200MB 이하 파일만 업로드 가능해요'); return; }
 
   pendingFile = file;
-  const src = URL.createObjectURL(file);
+  const src  = URL.createObjectURL(file);
   const zone = document.getElementById(zoneId);
   const prev = document.getElementById(prevId);
   if (zone) zone.style.display = 'none';
@@ -400,7 +416,7 @@ function handleFile(file, prevId, zoneId) {
   prev.innerHTML = `
     <div class="upl-done">
       <video src="${src}" controls playsinline preload="metadata"></video>
-      <div class="upl-meta">${esc(file.name)} · ${(file.size/1024/1024).toFixed(1)} MB</div>
+      <div class="upl-meta">${esc(file.name)} · ${(file.size / 1024 / 1024).toFixed(1)} MB</div>
       <button class="btn-clr" onclick="clearFile('${prevId}','${zoneId}')">✕</button>
     </div>`;
 }
@@ -423,7 +439,6 @@ async function saveCard() {
   btn.innerHTML = '<span class="spin"></span>';
 
   let mediaType = null, mediaId = null;
-
   if (addTab === 'yt') {
     const id = parseYtId(document.getElementById('add-yt').value);
     if (id) { mediaType = 'youtube'; mediaId = id; }
@@ -431,14 +446,15 @@ async function saveCard() {
     mediaType = 'video';
   }
 
-  const id = uid();
+  const id   = uid();
   const card = {
     id,
     name,
     address:   tempAddr,
+    region:    extractRegion(tempAddr),
     category:  selCat,
-    lat:       tempLatLng.lat,
-    lon:       tempLatLng.lng,
+    lat:       tempLatLng.getLat(),
+    lon:       tempLatLng.getLng(),
     mediaType,
     mediaId,
     date:      document.getElementById('add-date').value,
@@ -454,8 +470,6 @@ async function saveCard() {
   persistCards();
   addPin(card);
   updateBadge();
-
-  // 임시 핀 제거
   clearTempPin();
   cancelAddMode();
   closeSheet();
@@ -476,6 +490,7 @@ async function deleteActive() {
   updateBadge();
   closeSheet();
   toast('삭제됐어요');
+  if (currentTab === 'feed') renderFeed();
 }
 
 // ── 공유 ─────────────────────────────────────────────────────────────────────
@@ -483,7 +498,7 @@ async function shareActive() {
   const card = cards.find(c => c.id === activeId);
   if (!card) return;
 
-  const cat = CATS[card.category] || CATS.other;
+  const cat  = CATS[card.category] || CATS.other;
   const text = [
     `${cat.emoji} ${card.name}`,
     card.address,
@@ -505,45 +520,45 @@ async function shareActive() {
 function goMyLocation() {
   if (!navigator.geolocation) { toast('위치 권한이 필요해요'); return; }
   navigator.geolocation.getCurrentPosition(
-    p => map.setView([p.coords.latitude, p.coords.longitude], 15, { animate: true }),
+    p => {
+      map.setCenter(new kakao.maps.LatLng(p.coords.latitude, p.coords.longitude));
+      map.setLevel(3);
+    },
     () => toast('위치를 가져올 수 없어요')
   );
 }
 
-// ── 장소 검색 ─────────────────────────────────────────────────────────────────
-const doSearch = debounce(async q => {
+// ── 장소 검색 (카카오 키워드 검색) ──────────────────────────────────────────
+const doSearch = debounce(q => {
   const drop = document.getElementById('search-drop');
   if (!q.trim()) { hideDrop(); return; }
 
   drop.innerHTML = '<li class="no-res"><span class="spin"></span></li>';
   drop.classList.remove('hidden');
 
-  try {
-    const res = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5&addressdetails=1`,
-      { headers: { 'Accept-Language': 'ko,en' } }
-    );
-    searchResults = await res.json();
-    renderDrop(searchResults);
-  } catch {
-    drop.innerHTML = '<li class="no-res">검색 중 오류가 발생했어요</li>';
-  }
+  const ps = new kakao.maps.services.Places();
+  ps.keywordSearch(q, (result, status) => {
+    if (status === kakao.maps.services.Status.OK) {
+      searchResults = result;
+      renderDrop(result);
+    } else if (status === kakao.maps.services.Status.ZERO_RESULT) {
+      drop.innerHTML = '<li class="no-res">검색 결과가 없어요</li>';
+      drop.classList.remove('hidden');
+    } else {
+      drop.innerHTML = '<li class="no-res">검색 중 오류가 발생했어요</li>';
+      drop.classList.remove('hidden');
+    }
+  }, { size: 5 });
 }, 420);
 
 function renderDrop(results) {
   const drop = document.getElementById('search-drop');
-  if (!results.length) {
-    drop.innerHTML = '<li class="no-res">검색 결과가 없어요</li>';
-    drop.classList.remove('hidden');
-    return;
-  }
-  drop.innerHTML = results.map((r, i) => {
-    const name = shortName(r.display_name);
-    return `<li onclick="selectResult(${i})">
-              <span class="res-name">${esc(name)}</span>
-              <span class="res-full">${esc(r.display_name)}</span>
-            </li>`;
-  }).join('');
+  drop.innerHTML = results.map((r, i) => `
+    <li onclick="selectResult(${i})">
+      <span class="res-name">${esc(r.place_name)}</span>
+      <span class="res-full">${esc(r.road_address_name || r.address_name)}</span>
+    </li>
+  `).join('');
   drop.classList.remove('hidden');
 }
 
@@ -552,8 +567,7 @@ function hideDrop() {
 }
 
 function clearSearch() {
-  const inp = document.getElementById('search-input');
-  inp.value = '';
+  document.getElementById('search-input').value = '';
   document.getElementById('btn-sc').classList.add('hidden');
   hideDrop();
   searchResults = [];
@@ -563,52 +577,47 @@ function selectResult(idx) {
   const r = searchResults[idx];
   if (!r) return;
 
-  const latlng = L.latLng(parseFloat(r.lat), parseFloat(r.lon));
-
-  // 검색 UI 닫기
+  const latlng = new kakao.maps.LatLng(parseFloat(r.y), parseFloat(r.x));
   clearSearch();
 
-  // 지도 이동
-  map.setView(latlng, 16, { animate: true });
+  map.setCenter(latlng);
+  map.setLevel(3);
 
-  // add mode 조용히 진입 (배너 없이, 검색바 유지)
+  // add mode 진입 (배너 없이, 검색바 유지)
   addMode = true;
   document.getElementById('btn-fab').classList.add('is-cancel');
   document.getElementById('fab-plus').classList.add('hidden');
   document.getElementById('fab-x').classList.remove('hidden');
   document.getElementById('map').classList.add('add-mode');
 
-  // 임시 핀 배치
   clearTempPin();
   tempLatLng = latlng;
-  tempAddr   = r.display_name;
+  tempAddr   = r.road_address_name || r.address_name;
 
-  tempMarker = L.marker(latlng, {
-    icon: makeTempIcon(),
-    draggable: true,
-    zIndexOffset: 1000,
-  }).addTo(map);
-
-  tempMarker.on('dragend', e => {
-    tempLatLng = e.target.getLatLng();
-    reverseGeocode(tempLatLng.lat, tempLatLng.lng);
+  const content = makeTempContent();
+  tempMarker = new kakao.maps.CustomOverlay({
+    position: latlng,
+    content,
+    xAnchor:  0.5,
+    yAnchor:  1,
+    clickable: true,
+    zIndex:   10,
   });
+  tempMarker.setMap(map);
+  setupTempPinDrag(content, tempMarker);
 
-  // 지도 이동 완료 후 시트 열기
   setTimeout(() => {
     openAddSheet();
-    // resetAddForm() 실행 뒤 값 채우기
     setTimeout(() => {
-      document.getElementById('add-name').value = shortName(r.display_name);
-      document.getElementById('add-addr').textContent = r.display_name;
+      document.getElementById('add-name').value = r.place_name;
+      document.getElementById('add-addr').textContent = r.road_address_name || r.address_name;
     }, 20);
-    map.panBy([0, 80], { animate: true, duration: 0.3 });
+    map.panBy(0, 80);
   }, 350);
 }
 
 // ── 이벤트 리스너 ─────────────────────────────────────────────────────────────
 function setupListeners() {
-  // 검색바
   const sinp = document.getElementById('search-input');
   sinp.addEventListener('input', e => {
     const v = e.target.value;
@@ -619,29 +628,23 @@ function setupListeners() {
     if (e.key === 'Escape') clearSearch();
     if (e.key === 'Enter' && searchResults.length) selectResult(0);
   });
-  // 드롭다운 외부 클릭 닫기
   document.addEventListener('click', e => {
     if (!document.getElementById('search-wrap').contains(e.target)) hideDrop();
   });
 
-  // YouTube 실시간 미리보기
   const ytEl = document.getElementById('add-yt');
   ytEl.addEventListener('input', debounce(previewYt, 600));
   ytEl.addEventListener('paste', () => setTimeout(previewYt, 80));
 
-  // 파일 업로드
   document.getElementById('file-inp').addEventListener('change', e => {
     if (e.target.files[0]) handleFile(e.target.files[0], 'file-prev', 's-upzone');
   });
-
-  // 업로드 존 클릭
   document.getElementById('s-upzone').addEventListener('click', () =>
     document.getElementById('file-inp').click()
   );
 
-  // 드래그&드롭
   const zone = document.getElementById('s-upzone');
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+  zone.addEventListener('dragover',  e => { e.preventDefault(); zone.classList.add('drag-over'); });
   zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
   zone.addEventListener('drop', e => {
     e.preventDefault();
@@ -649,12 +652,10 @@ function setupListeners() {
     if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0], 'file-prev', 's-upzone');
   });
 
-  // 카메라
   document.getElementById('cam-inp').addEventListener('change', e => {
     if (e.target.files[0]) handleFile(e.target.files[0], 'cam-prev', null);
   });
 
-  // ESC → 시트 닫기
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
       if (document.getElementById('sheet').classList.contains('is-open')) closeSheet();
@@ -662,7 +663,6 @@ function setupListeners() {
     }
   });
 
-  // 시트 드래그 (스와이프 다운으로 닫기)
   setupSheetDrag();
 }
 
@@ -672,7 +672,7 @@ function setupSheetDrag() {
 
   const onStart = e => {
     sheetStartY = (e.touches || [e])[0].clientY;
-    sheetDrag = true;
+    sheetDrag   = true;
     sheet.style.transition = 'none';
   };
   const onMove = e => {
@@ -685,7 +685,7 @@ function setupSheetDrag() {
     sheetDrag = false;
     const dy = (e.changedTouches || [e])[0].clientY - sheetStartY;
     sheet.style.transition = '';
-    sheet.style.transform = '';
+    sheet.style.transform  = '';
     if (dy > 90) closeSheet();
   };
 
@@ -695,6 +695,149 @@ function setupSheetDrag() {
   dragEl.addEventListener('mousedown',  onStart);
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup',   onEnd);
+}
+
+// ── 탭 전환 ──────────────────────────────────────────────────────────────────
+function switchTab(tab) {
+  currentTab = tab;
+  const isMap  = tab === 'map';
+  const isFeed = tab === 'feed';
+
+  // 지도 탭 UI
+  document.getElementById('map').style.display           = isMap ? '' : 'none';
+  document.getElementById('btn-fab').style.display       = isMap ? '' : 'none';
+  document.querySelector('.btn-myloc').style.display     = isMap ? '' : 'none';
+  document.querySelector('.zoom-ctrl').style.display     = isMap ? '' : 'none';
+  document.getElementById('search-wrap').classList.toggle('hidden', !isMap);
+
+  // 추가 모드 중 탭 전환 시 취소
+  if (!isMap && addMode) cancelAddMode();
+
+  // 피드 뷰
+  document.getElementById('feed-view').classList.toggle('hidden', !isFeed);
+
+  // 탭 버튼 활성 상태
+  document.getElementById('tab-map').classList.toggle('active', isMap);
+  document.getElementById('tab-feed').classList.toggle('active', isFeed);
+
+  if (isFeed) {
+    renderFeed();
+  } else {
+    setTimeout(() => map && map.relayout(), 50);
+  }
+}
+
+// ── 지역 추출 (카카오 주소 → 시/구 단위) ──────────────────────────────────────
+function extractRegion(addr) {
+  if (!addr) return '기타';
+  const parts = addr.trim().split(/\s+/);
+  if (parts.length < 2) return parts[0] || '기타';
+
+  const p1 = parts[1];
+  const p2 = parts[2] || '';
+
+  // 도 > 시 > 구 구조 (경기 성남시 분당구)
+  if (/시$/.test(p1) && /구$/.test(p2)) return `${p1} ${p2}`;
+  // 광역시/특별시 > 구/군 구조 (서울 강남구) or 도 > 시 구조 (경기 수원시)
+  if (/[구군시]$/.test(p1)) return `${parts[0]} ${p1}`;
+
+  return parts[0];
+}
+
+// 저장된 region 필드가 없는 구 데이터는 address에서 파생
+function cardRegion(card) {
+  return card.region || extractRegion(card.address);
+}
+
+// ── 피드 렌더링 ───────────────────────────────────────────────────────────────
+function renderFeed() {
+  renderRegionChips();
+  renderFeedList();
+}
+
+function renderRegionChips() {
+  const regions = [...new Set(cards.map(cardRegion))].sort((a, b) =>
+    a.localeCompare(b, 'ko')
+  );
+  const wrap = document.getElementById('region-chips');
+  wrap.innerHTML = '';
+
+  const addChip = (label, value) => {
+    const btn = document.createElement('button');
+    btn.className = `chip${feedRegion === value ? ' active' : ''}`;
+    btn.textContent = label;
+    btn.onclick = () => { feedRegion = value; renderFeed(); };
+    wrap.appendChild(btn);
+  };
+
+  addChip('전체', 'all');
+  regions.forEach(r => addChip(r, r));
+}
+
+function renderFeedList() {
+  const list = document.getElementById('feed-list');
+  const items = feedRegion === 'all'
+    ? [...cards]
+    : cards.filter(c => cardRegion(c) === feedRegion);
+
+  if (!items.length) {
+    list.innerHTML = '<p class="feed-empty">저장된 장소가 없어요</p>';
+    return;
+  }
+
+  // 지역별 그룹핑 (삽입 순 유지)
+  const groups = new Map();
+  items.forEach(c => {
+    const r = cardRegion(c);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(c);
+  });
+
+  list.innerHTML = [...groups.entries()].map(([region, group]) => `
+    <div class="fs">
+      <div class="fs-head">
+        <span class="fs-region">${esc(region)}</span>
+        <span class="fs-count">${group.length}곳</span>
+      </div>
+      ${group.map(feedCard).join('')}
+    </div>
+  `).join('');
+}
+
+function feedCard(card) {
+  const cat = CATS[card.category] || CATS.other;
+
+  let media = '';
+  if (card.mediaType === 'youtube' && card.mediaId) {
+    media = `<div class="fc-media">
+      <img class="fc-thumb"
+           src="https://img.youtube.com/vi/${esc(card.mediaId)}/mqdefault.jpg"
+           alt="" loading="lazy">
+    </div>`;
+  } else if (card.mediaType === 'video') {
+    media = `<div class="fc-media fc-vid-icon">
+      <svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4z"/>
+      </svg>
+      <span>동영상</span>
+    </div>`;
+  }
+
+  return `<div class="fc" onclick="openFromFeed('${card.id}')">
+    ${media}
+    <div class="fc-body">
+      <span class="fc-cat" style="color:${cat.color}">${cat.emoji} ${cat.label}</span>
+      <div class="fc-name">${esc(card.name)}</div>
+      ${card.address ? `<div class="fc-addr">${esc(card.address)}</div>` : ''}
+      ${card.date    ? `<div class="fc-date">📅 ${card.date}</div>`     : ''}
+      ${card.memo    ? `<div class="fc-memo">${esc(card.memo)}</div>`   : ''}
+    </div>
+  </div>`;
+}
+
+function openFromFeed(id) {
+  switchTab('map');
+  setTimeout(() => openViewSheet(id), 120);
 }
 
 // ── localStorage ─────────────────────────────────────────────────────────────
@@ -719,8 +862,12 @@ function today() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function shortName(displayName) {
-  return (displayName || '').split(',')[0].trim() || '새 장소';
+// 카카오 주소: "서울 강남구 역삼동 123" → "강남구 역삼동"
+function shortName(addr) {
+  if (!addr) return '새 장소';
+  const parts = addr.trim().split(/\s+/);
+  // 광역시/도 제외, 구/동 수준 2개
+  return parts.slice(1, 3).join(' ') || parts[0] || '새 장소';
 }
 
 function esc(s) {
