@@ -182,6 +182,7 @@ async function handleKakaoCallback(code) {
   } catch (e) {
     console.error('[Kakao callback]', e);
     btn.classList.remove('loading');
+    showLoginScreen();
     toast('로그인에 실패했어요. 다시 시도해주세요');
   }
 }
@@ -220,11 +221,18 @@ function logout() {
 // ── 부트스트랩 ────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await videoDB.open().catch(() => {});
-  initFirestore();
-  initMap();
-  buildCatPills();
-  setupListeners();
-  document.getElementById('add-date').value = today();
+
+  // 지도·Firestore 초기화 실패해도 initAuth()는 반드시 실행
+  try {
+    initFirestore();
+    initMap();
+    buildCatPills();
+    setupListeners();
+    document.getElementById('add-date').value = today();
+  } catch (e) {
+    console.error('[init]', e);
+  }
+
   initAuth();
 });
 
