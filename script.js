@@ -1,5 +1,9 @@
 'use strict';
 
+// ── 카카오 OAuth 설정 ─────────────────────────────────────────────────────────
+const KAKAO_REST_KEY     = 'c8e1aff96846e2c941a590a9c20b3621';
+const KAKAO_REDIRECT_URI = 'https://benkimkr.github.io/placelog';
+
 // ── Firebase 설정 ─────────────────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey:            'AIzaSyBcTMKjYDFOZ0MK7dvCJEkj-4aZzRub1L0',
@@ -98,7 +102,25 @@ function subscribeToPlaces() {
 
 // ── 카카오 인증 ───────────────────────────────────────────────────────────────
 function initAuth() {
-  Kakao.init('a0a94073377626348a12a0473d152c0c');
+  const params = new URLSearchParams(location.search);
+  const code   = params.get('code');
+  const error  = params.get('error');
+
+  if (error) {
+    history.replaceState({}, '', location.pathname);
+    if (error !== 'access_denied') toast('카카오 로그인에 실패했어요: ' + error);
+    showLoginScreen();
+    return;
+  }
+
+  if (code) {
+    history.replaceState({}, '', location.pathname);
+    showLoginScreen();
+    document.getElementById('btn-kakao').classList.add('loading');
+    handleKakaoCallback(code);
+    return;
+  }
+
   const stored = localStorage.getItem('placelog_user');
   if (stored) {
     try { currentUser = JSON.parse(stored); onAuthReady(); return; } catch {}
@@ -116,53 +138,51 @@ function hideLoginScreen() {
 function loginWithKakao() {
   const btn = document.getElementById('btn-kakao');
   if (btn.classList.contains('loading')) return;
-
-  if (!window.Kakao || !Kakao.isInitialized()) {
-    toast('카카오 SDK를 불러오는 중이에요. 잠시 후 다시 시도해주세요');
-    return;
-  }
-
   btn.classList.add('loading');
-  const restore = () => btn.classList.remove('loading');
+  location.href =
+    'https://kauth.kakao.com/oauth/authorize' +
+    `?client_id=${KAKAO_REST_KEY}` +
+    `&redirect_uri=${encodeURIComponent(KAKAO_REDIRECT_URI)}` +
+    '&response_type=code';
+}
 
-  // 팝업이 막혀 콜백이 아예 안 올 경우를 대비한 20초 타임아웃
-  const guard = setTimeout(() => {
-    restore();
-    toast('팝업이 차단됐을 수 있어요. 주소창 옆 팝업 차단 아이콘을 눌러 허용해주세요');
-  }, 20000);
-
+async function handleKakaoCallback(code) {
+  const btn = document.getElementById('btn-kakao');
   try {
-    Kakao.Auth.login({
-      success() {
-        Kakao.API.request({
-          url: '/v2/user/me',
-          success(res) {
-            clearTimeout(guard);
-            restore();
-            currentUser = {
-              id:           String(res.id),
-              nickname:     res.kakao_account?.profile?.nickname || '사용자',
-              profileImage: res.kakao_account?.profile?.thumbnail_image_url || null,
-            };
-            localStorage.setItem('placelog_user', JSON.stringify(currentUser));
-            onAuthReady();
-          },
-          fail() { clearTimeout(guard); restore(); toast('사용자 정보를 가져올 수 없어요'); },
-        });
-      },
-      fail(e) {
-        clearTimeout(guard);
-        restore();
-        if (e.error !== 'access_denied') {
-          toast('로그인에 실패했어요' + (e.error_description ? `: ${e.error_description}` : ''));
-        }
-      },
+    // 인가 코드 → 액세스 토큰
+    const tokenRes = await fetch('https://kauth.kakao.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      body: new URLSearchParams({
+        grant_type:   'authorization_code',
+        client_id:    KAKAO_REST_KEY,
+        redirect_uri: KAKAO_REDIRECT_URI,
+        code,
+      }),
     });
+    const token = await tokenRes.json();
+    if (token.error) throw new Error(token.error_description || token.error);
+
+    // 액세스 토큰 → 사용자 정보
+    const userRes = await fetch('https://kapi.kakao.com/v2/user/me', {
+      headers: { Authorization: `Bearer ${token.access_token}` },
+    });
+    const userData = await userRes.json();
+    if (userData.code) throw new Error(userData.msg || '사용자 정보 조회 실패');
+
+    currentUser = {
+      id:           String(userData.id),
+      nickname:     userData.kakao_account?.profile?.nickname || '사용자',
+      profileImage: userData.kakao_account?.profile?.thumbnail_image_url || null,
+    };
+    localStorage.setItem('placelog_user', JSON.stringify(currentUser));
+    btn.classList.remove('loading');
+    onAuthReady();
+
   } catch (e) {
-    clearTimeout(guard);
-    restore();
-    toast('카카오 SDK 오류가 발생했어요. 잠시 후 다시 시도해주세요');
-    console.error('[Kakao login]', e);
+    console.error('[Kakao callback]', e);
+    btn.classList.remove('loading');
+    toast('로그인에 실패했어요. 다시 시도해주세요');
   }
 }
 
