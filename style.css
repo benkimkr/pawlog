@@ -106,7 +106,7 @@ html, body {
 }
 .btn-kakao:hover { opacity: .88; }
 .btn-kakao:active { transform: scale(.97); }
-.btn-kakao:disabled { opacity: .5; cursor: not-allowed; }
+.btn-kakao.loading { opacity: .65; cursor: wait; pointer-events: none; }
 
 /* ── 헤더 HUD ── */
 .hud-header {

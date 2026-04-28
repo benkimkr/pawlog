@@ -115,28 +115,55 @@ function hideLoginScreen() {
 
 function loginWithKakao() {
   const btn = document.getElementById('btn-kakao');
-  btn.disabled = true;
-  Kakao.Auth.login({
-    success() {
-      Kakao.API.request({
-        url: '/v2/user/me',
-        success(res) {
-          currentUser = {
-            id:           String(res.id),
-            nickname:     res.kakao_account?.profile?.nickname || '사용자',
-            profileImage: res.kakao_account?.profile?.thumbnail_image_url || null,
-          };
-          localStorage.setItem('placelog_user', JSON.stringify(currentUser));
-          onAuthReady();
-        },
-        fail() { btn.disabled = false; toast('사용자 정보를 가져올 수 없어요'); },
-      });
-    },
-    fail(e) {
-      btn.disabled = false;
-      if (e.error !== 'access_denied') toast('로그인에 실패했어요');
-    },
-  });
+  if (btn.classList.contains('loading')) return;
+
+  if (!window.Kakao || !Kakao.isInitialized()) {
+    toast('카카오 SDK를 불러오는 중이에요. 잠시 후 다시 시도해주세요');
+    return;
+  }
+
+  btn.classList.add('loading');
+  const restore = () => btn.classList.remove('loading');
+
+  // 팝업이 막혀 콜백이 아예 안 올 경우를 대비한 20초 타임아웃
+  const guard = setTimeout(() => {
+    restore();
+    toast('팝업이 차단됐을 수 있어요. 주소창 옆 팝업 차단 아이콘을 눌러 허용해주세요');
+  }, 20000);
+
+  try {
+    Kakao.Auth.login({
+      success() {
+        Kakao.API.request({
+          url: '/v2/user/me',
+          success(res) {
+            clearTimeout(guard);
+            restore();
+            currentUser = {
+              id:           String(res.id),
+              nickname:     res.kakao_account?.profile?.nickname || '사용자',
+              profileImage: res.kakao_account?.profile?.thumbnail_image_url || null,
+            };
+            localStorage.setItem('placelog_user', JSON.stringify(currentUser));
+            onAuthReady();
+          },
+          fail() { clearTimeout(guard); restore(); toast('사용자 정보를 가져올 수 없어요'); },
+        });
+      },
+      fail(e) {
+        clearTimeout(guard);
+        restore();
+        if (e.error !== 'access_denied') {
+          toast('로그인에 실패했어요' + (e.error_description ? `: ${e.error_description}` : ''));
+        }
+      },
+    });
+  } catch (e) {
+    clearTimeout(guard);
+    restore();
+    toast('카카오 SDK 오류가 발생했어요. 잠시 후 다시 시도해주세요');
+    console.error('[Kakao login]', e);
+  }
 }
 
 function onAuthReady() {
