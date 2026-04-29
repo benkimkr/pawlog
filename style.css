@@ -107,6 +107,14 @@ html, body {
 .btn-kakao:hover { opacity: .88; }
 .btn-kakao:active { transform: scale(.97); }
 .btn-kakao.loading { opacity: .65; cursor: wait; pointer-events: none; }
+.login-popup-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #ff6b6b;
+  line-height: 1.5;
+  text-align: center;
+  min-height: 1em;
+}
 
 /* ── 헤더 HUD ── */
 .hud-header {

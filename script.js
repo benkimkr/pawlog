@@ -1,10 +1,7 @@
 'use strict';
 
 // ── 카카오 OAuth 설정 ─────────────────────────────────────────────────────────
-const KAKAO_REST_KEY      = 'c8e1aff96846e2c941a590a9c20b3621';
-const KAKAO_REDIRECT_URI  = 'https://benkimkr.github.io/placelog';
-// 클라이언트 시크릿: Kakao 보안 설정이 "사용 안 함"이면 빈 문자열로 둘 것
-const KAKAO_CLIENT_SECRET = 'R31TC8SsWiESFJpjIgn9wYnQjtwh6tuo';
+const KAKAO_JS_KEY = 'a0a94073377626348a12a0473d152c0c';
 
 // ── Firebase 설정 ─────────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -104,24 +101,7 @@ function subscribeToPlaces() {
 
 // ── 카카오 인증 ───────────────────────────────────────────────────────────────
 function initAuth() {
-  const params = new URLSearchParams(location.search);
-  const code   = params.get('code');
-  const error  = params.get('error');
-
-  if (error) {
-    history.replaceState({}, '', location.pathname);
-    if (error !== 'access_denied') toast('카카오 로그인에 실패했어요: ' + error);
-    showLoginScreen();
-    return;
-  }
-
-  if (code) {
-    history.replaceState({}, '', location.pathname);
-    showLoginScreen();
-    document.getElementById('btn-kakao').classList.add('loading');
-    handleKakaoCallback(code);
-    return;
-  }
+  if (!Kakao.isInitialized()) Kakao.init(KAKAO_JS_KEY);
 
   const stored = localStorage.getItem('placelog_user');
   if (stored) {
@@ -137,64 +117,48 @@ function hideLoginScreen() {
   document.getElementById('login-screen').classList.add('hidden');
 }
 
+function setPopupHint(msg) {
+  const el = document.getElementById('login-popup-hint');
+  if (el) el.textContent = msg;
+}
+
 function loginWithKakao() {
   const btn = document.getElementById('btn-kakao');
   if (btn.classList.contains('loading')) return;
   btn.classList.add('loading');
-  const sub = document.querySelector('.login-sub');
-  if (sub) sub.textContent = '나만의 장소를 기록하세요';
-  location.href =
-    'https://kauth.kakao.com/oauth/authorize' +
-    `?client_id=${KAKAO_REST_KEY}` +
-    `&redirect_uri=${encodeURIComponent(KAKAO_REDIRECT_URI)}` +
-    '&response_type=code';
-}
+  setPopupHint('');
 
-async function handleKakaoCallback(code) {
-  const btn = document.getElementById('btn-kakao');
-  const sub = document.querySelector('.login-sub');
+  Kakao.Auth.login({
+    success: async authObj => {
+      try {
+        const res = await fetch('https://kapi.kakao.com/v2/user/me', {
+          headers: { Authorization: `Bearer ${authObj.access_token}` },
+        });
+        const userData = await res.json();
+        if (userData.code < 0) throw new Error(`사용자 조회 실패 (${userData.code})`);
 
-  const setSubError = msg => { if (sub) sub.textContent = msg; };
-
-  try {
-    // ① 인가 코드 → 액세스 토큰
-    const tokenRes = await fetch('https://kauth.kakao.com/oauth/token', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body:    'grant_type=authorization_code'
-             + `&client_id=${KAKAO_REST_KEY}`
-             + `&redirect_uri=${encodeURIComponent(KAKAO_REDIRECT_URI)}`
-             + `&code=${encodeURIComponent(code)}`
-             + (KAKAO_CLIENT_SECRET ? `&client_secret=${KAKAO_CLIENT_SECRET}` : ''),
-    });
-
-    const token = await tokenRes.json();
-    if (token.error) throw new Error(`토큰 오류: ${token.error_description || token.error}`);
-    if (!token.access_token) throw new Error('액세스 토큰을 받지 못했어요');
-
-    // ② 액세스 토큰 → 사용자 정보
-    const userRes = await fetch('https://kapi.kakao.com/v2/user/me', {
-      headers: { Authorization: `Bearer ${token.access_token}` },
-    });
-    const userData = await userRes.json();
-    if (userData.code < 0) throw new Error(`사용자 조회 실패 (${userData.code}): ${userData.msg}`);
-
-    currentUser = {
-      id:           String(userData.id),
-      nickname:     userData.kakao_account?.profile?.nickname || '사용자',
-      profileImage: userData.kakao_account?.profile?.thumbnail_image_url || null,
-    };
-    localStorage.setItem('placelog_user', JSON.stringify(currentUser));
-    btn.classList.remove('loading');
-    onAuthReady();
-
-  } catch (e) {
-    console.error('[Kakao callback]', e);
-    btn.classList.remove('loading');
-    showLoginScreen();
-    // 토스트는 사라지므로 로그인 카드에 오류를 직접 표시
-    setSubError('⚠️ ' + e.message);
-  }
+        currentUser = {
+          id:           String(userData.id),
+          nickname:     userData.kakao_account?.profile?.nickname || '사용자',
+          profileImage: userData.kakao_account?.profile?.thumbnail_image_url || null,
+        };
+        localStorage.setItem('placelog_user', JSON.stringify(currentUser));
+        btn.classList.remove('loading');
+        onAuthReady();
+      } catch (e) {
+        console.error('[Kakao login]', e);
+        btn.classList.remove('loading');
+        setPopupHint('⚠️ ' + e.message);
+      }
+    },
+    fail: err => {
+      console.error('[Kakao login fail]', err);
+      btn.classList.remove('loading');
+      if (err && err.error === 'access_denied') return;
+      // 팝업 차단 또는 기타 오류
+      setPopupHint('⚠️ 팝업이 차단됐어요. 주소창 오른쪽의 팝업 차단 아이콘을 클릭해 이 사이트의 팝업을 허용한 뒤 다시 시도해주세요.');
+    },
+  });
 }
 
 function onAuthReady() {
