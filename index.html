@@ -20,7 +20,23 @@
     </div>
     <div class="hud-right">
       <div class="pin-badge" id="pin-badge">0 곳</div>
-      <button class="user-avatar hidden" id="user-avatar" onclick="logout()" title="로그아웃"></button>
+      <div class="profile-wrap" id="profile-wrap">
+        <button class="user-avatar hidden" id="user-avatar" onclick="toggleProfileMenu()"></button>
+        <div class="profile-menu hidden" id="profile-menu">
+          <div class="pm-profile">
+            <div class="pm-avatar" id="pm-avatar"></div>
+            <div class="pm-info">
+              <span class="pm-name" id="pm-name"></span>
+              <span class="pm-count" id="pm-count">기록한 장소 0곳</span>
+            </div>
+          </div>
+          <div class="pm-divider"></div>
+          <button class="pm-logout" onclick="logout()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+            로그아웃
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 

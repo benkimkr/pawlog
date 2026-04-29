@@ -168,19 +168,49 @@ function onAuthReady() {
 }
 
 function updateUserUI() {
-  const el = document.getElementById('user-avatar');
-  if (!el || !currentUser) return;
-  el.classList.remove('hidden');
+  if (!currentUser) return;
+  const avatar = document.getElementById('user-avatar');
+  if (!avatar) return;
+  avatar.classList.remove('hidden');
   if (currentUser.profileImage) {
-    el.innerHTML = `<img src="${currentUser.profileImage}" alt="">`;
+    avatar.innerHTML = `<img src="${currentUser.profileImage}" alt="">`;
   } else {
-    el.textContent = (currentUser.nickname[0] || '?').toUpperCase();
+    avatar.textContent = (currentUser.nickname[0] || '?').toUpperCase();
   }
-  el.title = `${currentUser.nickname} · 로그아웃`;
+}
+
+function toggleProfileMenu() {
+  const menu = document.getElementById('profile-menu');
+  if (!menu) return;
+  if (menu.classList.contains('hidden')) {
+    updateProfileMenu();
+    menu.classList.remove('hidden');
+  } else {
+    menu.classList.add('hidden');
+  }
+}
+
+function updateProfileMenu() {
+  if (!currentUser) return;
+
+  const pmAvatar = document.getElementById('pm-avatar');
+  if (pmAvatar) {
+    if (currentUser.profileImage) {
+      pmAvatar.innerHTML = `<img src="${currentUser.profileImage}" alt="">`;
+    } else {
+      pmAvatar.textContent = (currentUser.nickname[0] || '?').toUpperCase();
+    }
+  }
+
+  const pmName = document.getElementById('pm-name');
+  if (pmName) pmName.textContent = currentUser.nickname;
+
+  const pmCount = document.getElementById('pm-count');
+  if (pmCount) pmCount.textContent = `기록한 장소 ${cards.length}곳`;
 }
 
 function logout() {
-  if (!confirm('로그아웃 할까요?')) return;
+  document.getElementById('profile-menu')?.classList.add('hidden');
   localStorage.removeItem('placelog_user');
   currentUser = null;
   if (placesUnsub) { placesUnsub(); placesUnsub = null; }
@@ -193,6 +223,13 @@ function logout() {
 }
 
 // ── 부트스트랩 ────────────────────────────────────────────────────────────────
+document.addEventListener('click', e => {
+  const wrap = document.getElementById('profile-wrap');
+  const menu = document.getElementById('profile-menu');
+  if (!menu || menu.classList.contains('hidden')) return;
+  if (wrap && !wrap.contains(e.target)) menu.classList.add('hidden');
+});
+
 document.addEventListener('DOMContentLoaded', async () => {
   await videoDB.open().catch(() => {});
 
