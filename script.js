@@ -16,21 +16,17 @@ let db;
 
 // ── 카테고리 ──────────────────────────────────────────────────────────────────
 const CATS = {
-  park:    { label: '공원',        emoji: '🌳', color: '#4ade80' },
-  trail:   { label: '산책로',      emoji: '🐾', color: '#86efac' },
-  dogcafe: { label: '강아지 카페', emoji: '🐶', color: '#fb923c' },
-  vet:     { label: '동물병원',    emoji: '🏥', color: '#60a5fa' },
-  petshop: { label: '반려견 용품', emoji: '🛍️', color: '#f472b6' },
+  trail:   { label: '산책로',          emoji: '🐾', color: '#86efac' },
+  dogcafe: { label: '강아지 카페',     emoji: '☕', color: '#fb923c' },
+  park:    { label: '공원',            emoji: '🌳', color: '#4ade80' },
+  vet:     { label: '동물병원',        emoji: '🏥', color: '#60a5fa' },
+  cat:     { label: '길고양이 출몰',   emoji: '🐱', color: '#f472b6' },
+  marking: { label: '마킹 스팟',       emoji: '💩', color: '#a78bfa' },
+  petshop: { label: '반려동물 용품점', emoji: '🛒', color: '#fbbf24' },
 };
 
-// 발바닥 SVG (핀 마커용)
-const PAW_SVG = `<svg class="pin-paw" viewBox="0 0 24 24" width="19" height="19" fill="rgba(255,255,255,.95)">
-  <ellipse cx="12" cy="16.5" rx="5.2" ry="4.2"/>
-  <circle cx="6.2"  cy="11.5" r="2.4"/>
-  <circle cx="10.4" cy="7.8"  r="2.4"/>
-  <circle cx="13.6" cy="7.8"  r="2.4"/>
-  <circle cx="17.8" cy="11.5" r="2.4"/>
-</svg>`;
+// 발바닥 핀 아이콘 (이모지)
+const PAW_SVG = `<span class="pin-emoji">🐾</span>`;
 
 // ── IndexedDB (동영상 blob) ───────────────────────────────────────────────────
 const videoDB = (() => {
@@ -70,7 +66,7 @@ let tempAddr      = '';
 let pendingFile   = null;
 let activeId      = null;
 let addTab        = 'yt';
-let selCat        = 'park';
+let selCat        = 'trail';
 let searchResults = [];
 
 // 인증
@@ -593,10 +589,10 @@ function resetAddForm() {
   document.getElementById('add-date').value = today();
   document.getElementById('add-collection').value = '';
   pendingFile = null;
-  selCat = 'park';
+  selCat = 'trail';
   switchAddTab('yt');
   document.querySelectorAll('.cat-pill').forEach(p =>
-    p.classList.toggle('active', p.dataset.cat === 'park')
+    p.classList.toggle('active', p.dataset.cat === 'trail')
   );
 }
 
@@ -610,7 +606,7 @@ function buildCatPills() {
   const wrap = document.getElementById('cat-pills');
   Object.entries(CATS).forEach(([key, c]) => {
     const btn = document.createElement('button');
-    btn.className = `cat-pill${key === 'park' ? ' active' : ''}`;
+    btn.className = `cat-pill${key === 'trail' ? ' active' : ''}`;
     btn.dataset.cat = key;
     btn.textContent = `${c.emoji} ${c.label}`;
     btn.onclick = () => {
