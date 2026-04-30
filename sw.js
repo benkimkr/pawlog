@@ -10,6 +10,9 @@ const PRECACHE = [
   './script.js',
   './manifest.json',
   './icons/icon.svg',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/apple-touch-icon.png',
 ];
 
 // ── 설치: 로컬 애셋 선(先)캐싱 ────────────────────────────────────────────────
