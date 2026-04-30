@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="114" fill="#0a0a0f"/>
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f97316"/>
+      <stop offset="100%" stop-color="#fbbf24"/>
+    </linearGradient>
+  </defs>
+  <!-- 발바닥 패드 (메인) -->
+  <ellipse cx="256" cy="318" rx="88" ry="72" fill="url(#g)"/>
+  <!-- 발가락 4개 -->
+  <ellipse cx="164" cy="245" rx="36" ry="44" fill="url(#g)" transform="rotate(-18 164 245)"/>
+  <ellipse cx="348" cy="245" rx="36" ry="44" fill="url(#g)" transform="rotate(18 348 245)"/>
+  <ellipse cx="204" cy="192" rx="30" ry="38" fill="url(#g)" transform="rotate(-28 204 192)"/>
+  <ellipse cx="308" cy="192" rx="30" ry="38" fill="url(#g)" transform="rotate(28 308 192)"/>
+</svg>

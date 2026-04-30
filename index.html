@@ -3,8 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#0a0a0f">
+  <meta name="theme-color" content="#f97316">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="킁킁로그">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
   <title>킁킁로그</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -31,6 +36,7 @@
             <div class="pm-info">
               <span class="pm-name" id="pm-name"></span>
               <span class="pm-count" id="pm-count">기록한 장소 0곳</span>
+              <span class="pm-streak" id="pm-streak"></span>
             </div>
           </div>
           <div class="pm-divider"></div>
@@ -292,6 +298,35 @@
     </div>
   </div>
 
+  <!-- 산책 인증 모달 -->
+  <div class="modal-overlay hidden" id="route-photo-modal">
+    <div class="modal-card rp-card">
+      <div class="modal-head">
+        <h3>산책 완료 🐾</h3>
+      </div>
+      <div class="rp-stats" id="rp-stats"></div>
+      <div class="rp-body">
+        <div class="rp-no-photo" id="rp-no-photo">
+          <p class="rp-hint">인증샷을 찍어서 피드에 공유해요!</p>
+          <div class="rp-photo-btns">
+            <input type="file" id="rp-cam-inp" accept="image/*" capture="environment" hidden />
+            <input type="file" id="rp-gal-inp" accept="image/*" hidden />
+            <button class="rp-btn" onclick="document.getElementById('rp-cam-inp').click()">📷 카메라</button>
+            <button class="rp-btn" onclick="document.getElementById('rp-gal-inp').click()">🖼 갤러리</button>
+          </div>
+        </div>
+        <div class="rp-preview hidden" id="rp-preview">
+          <img class="rp-img" id="rp-img" src="" alt="인증샷">
+          <button class="rp-clear" onclick="clearRoutePhoto()">✕</button>
+        </div>
+      </div>
+      <div class="modal-btns">
+        <button class="btn-cancel" onclick="skipRoutePhoto()">사진 없이 저장</button>
+        <button class="btn-save" id="btn-save-route" onclick="confirmSaveRoute()">공유하기 🐾</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 초대 수락 모달 -->
   <div class="modal-overlay hidden" id="invite-modal">
     <div class="modal-card">
@@ -328,5 +363,12 @@
   <script src="https://developers.kakao.com/sdk/js/kakao.js"></script>
   <script src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=a0a94073377626348a12a0473d152c0c&libraries=services"></script>
   <script src="script.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>

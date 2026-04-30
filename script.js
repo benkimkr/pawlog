@@ -138,6 +138,7 @@ function subscribeToCollections() {
         myCollections = snap.docs.map(d => d.data());
         updateCollectionSelector();
         refreshPlacesSubscriptions();
+        subscribeToWalks();
         if (currentTab === 'collections') renderCollectionsView();
       },
       err => toast('컬렉션 로드 오류: ' + err.message)
@@ -261,6 +262,12 @@ function updateProfileMenu() {
 
   const pmCount = document.getElementById('pm-count');
   if (pmCount) pmCount.textContent = `기록한 장소 ${cards.length}곳`;
+
+  const streak   = getStreak();
+  const pmStreak = document.getElementById('pm-streak');
+  if (pmStreak) {
+    pmStreak.textContent = streak.count > 0 ? `🔥 ${streak.count}일 연속 산책 중` : '';
+  }
 }
 
 function logout() {
@@ -273,8 +280,8 @@ function logout() {
     isRecording = false;
   }
   if (currentPolyline) { currentPolyline.setMap(null); currentPolyline = null; }
-  if (routesUnsub) { routesUnsub(); routesUnsub = null; }
-  routeCards = []; routePoints = [];
+  walksUnsubList.forEach(u => u()); walksUnsubList = [];
+  walkCards = []; walkBuckets.clear(); routePoints = [];
 
   // 안개지도 끄기
   if (isFogEnabled) toggleFog();
@@ -319,6 +326,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   initAuth();
+
+  // 스플래시 오버레이 제거
+  requestAnimationFrame(() => document.body.classList.add('ready'));
 });
 
 // ── 지도 초기화 ───────────────────────────────────────────────────────────────
@@ -934,6 +944,13 @@ function setupListeners() {
     }
   });
 
+  document.getElementById('rp-cam-inp')?.addEventListener('change', e => {
+    if (e.target.files[0]) handleRoutePhoto(e.target.files[0]);
+  });
+  document.getElementById('rp-gal-inp')?.addEventListener('change', e => {
+    if (e.target.files[0]) handleRoutePhoto(e.target.files[0]);
+  });
+
   setupSheetDrag();
 }
 
@@ -1051,38 +1068,51 @@ function renderRegionChips() {
 
 function renderFeedList() {
   const list = document.getElementById('feed-list');
-  const items = feedRegion === 'all'
+
+  const filteredPlaces = feedRegion === 'all'
     ? [...cards]
     : cards.filter(c => cardRegion(c) === feedRegion);
 
-  if (!items.length) {
+  if (!filteredPlaces.length && !walkCards.length) {
     list.innerHTML = '<p class="feed-empty">아직 산책 기록이 없어요 🐾</p>';
     return;
   }
 
-  // 지역별 그룹핑 (삽입 순 유지)
-  const groups = new Map();
-  items.forEach(c => {
-    const r = cardRegion(c);
-    if (!groups.has(r)) groups.set(r, []);
-    groups.get(r).push(c);
-  });
+  let html = '';
 
-  list.innerHTML = [...groups.entries()].map(([region, group]) => `
-    <div class="fs">
-      <div class="fs-head">
-        <span class="fs-region">${esc(region)}</span>
-        <span class="fs-count">${group.length}곳</span>
+  if (walkCards.length) {
+    html += `<div class="feed-section-head">🐕 산책 기록</div>`;
+    html += walkCards.map(walkFeedCard).join('');
+  }
+
+  if (filteredPlaces.length) {
+    if (walkCards.length) html += `<div class="feed-section-head" style="margin-top:20px">📍 방문 장소</div>`;
+    const groups = new Map();
+    filteredPlaces.forEach(c => {
+      const r = cardRegion(c);
+      if (!groups.has(r)) groups.set(r, []);
+      groups.get(r).push(c);
+    });
+    html += [...groups.entries()].map(([region, group]) => `
+      <div class="fs">
+        <div class="fs-head">
+          <span class="fs-region">${esc(region)}</span>
+          <span class="fs-count">${group.length}곳</span>
+        </div>
+        ${group.map(feedCard).join('')}
       </div>
-      ${group.map(feedCard).join('')}
-    </div>
-  `).join('');
+    `).join('');
+  }
+
+  list.innerHTML = html;
+  setTimeout(loadWalkPhotos, 80);
 }
 
 function feedCard(card) {
-  const cat = CATS[card.category] || CATS.park;
-  const col = card.collectionId ? myCollections.find(c => c.id === card.collectionId) : null;
+  const cat     = CATS[card.category] || CATS.park;
+  const col     = card.collectionId ? myCollections.find(c => c.id === card.collectionId) : null;
   const byOther = card.userId !== currentUser?.id;
+  const regular = isRegularSpot(card);
 
   let media = '';
   if (card.mediaType === 'youtube' && card.mediaId) {
@@ -1105,7 +1135,8 @@ function feedCard(card) {
     <div class="fc-body">
       <div class="fc-top-row">
         <span class="fc-cat" style="color:${cat.color}">${cat.emoji} ${cat.label}</span>
-        ${col ? `<span class="fc-coll"># ${esc(col.name)}</span>` : ''}
+        ${col     ? `<span class="fc-coll"># ${esc(col.name)}</span>`  : ''}
+        ${regular ? `<span class="fc-regular">⭐ 단골</span>`          : ''}
       </div>
       <div class="fc-name">${esc(card.name)}</div>
       ${card.address ? `<div class="fc-addr">${esc(card.address)}</div>` : ''}
@@ -1330,6 +1361,13 @@ let currentPolyline = null;
 let routeCards     = [];
 let routesUnsub    = null;
 
+// 산책 인증 (walks)
+let walkCards       = [];
+let walksUnsubList  = [];
+let walkBuckets     = new Map();
+let pendingRouteData = null;
+let routePhotoFile   = null;
+
 function startRoute() {
   if (!navigator.geolocation) { toast('GPS 권한이 필요해요'); return; }
   if (isRecording) return;
@@ -1379,7 +1417,35 @@ function stopRoute() {
     return;
   }
 
-  saveRoute();
+  const dist = calcDistance(routePoints);
+  const dur  = Math.floor((Date.now() - routeStartTime) / 1000);
+
+  pendingRouteData = {
+    id:           uid(),
+    userId:       currentUser.id,
+    userNickname: currentUser.nickname,
+    points:       [...routePoints],
+    distance:     Math.round(dist),
+    duration:     dur,
+    startedAt:    new Date(routeStartTime).toISOString(),
+    createdAt:    new Date().toISOString(),
+    hasPhoto:     false,
+  };
+
+  if (currentPolyline) { currentPolyline.setMap(null); currentPolyline = null; }
+  routePoints    = [];
+  routeStartTime = null;
+
+  const km = (dist / 1000).toFixed(2);
+  const mm = String(Math.floor(dur / 60)).padStart(2, '0');
+  const ss = String(dur % 60).padStart(2, '0');
+  const statsEl = document.getElementById('rp-stats');
+  if (statsEl) statsEl.innerHTML = `<span>📍 ${km} km</span><span>⏱ ${mm}:${ss}</span>`;
+
+  routePhotoFile = null;
+  document.getElementById('rp-no-photo')?.classList.remove('hidden');
+  document.getElementById('rp-preview')?.classList.add('hidden');
+  document.getElementById('route-photo-modal')?.classList.remove('hidden');
 }
 
 function drawRouteLine() {
@@ -1435,29 +1501,23 @@ function updateRouteUI() {
 }
 
 async function saveRoute() {
-  const dist  = calcDistance(routePoints);
-  const dur   = Math.floor((Date.now() - routeStartTime) / 1000);
-  const route = {
-    id:           uid(),
-    userId:       currentUser.id,
-    userNickname: currentUser.nickname,
-    points:       routePoints,
-    distance:     Math.round(dist),
-    duration:     dur,
-    startedAt:    new Date(routeStartTime).toISOString(),
-    createdAt:    new Date().toISOString(),
-  };
+  if (!pendingRouteData) return;
+  const walk = { ...pendingRouteData, hasPhoto: !!routePhotoFile };
 
-  try {
-    await db.collection('routes').doc(route.id).set(route);
-    toast(`경로 저장 완료! ${(dist / 1000).toFixed(2)} km 🐾`);
-  } catch {
-    toast('경로 저장에 실패했어요');
+  if (routePhotoFile) {
+    await videoDB.save(walk.id, routePhotoFile).catch(() => {});
   }
 
-  if (currentPolyline) { currentPolyline.setMap(null); currentPolyline = null; }
-  routePoints    = [];
-  routeStartTime = null;
+  try {
+    await db.collection('walks').doc(walk.id).set(walk);
+    const km = (walk.distance / 1000).toFixed(2);
+    toast(`산책 저장 완료! ${km} km 🐾`);
+  } catch {
+    toast('저장에 실패했어요');
+  }
+
+  pendingRouteData = null;
+  routePhotoFile   = null;
 }
 
 function subscribeToRoutes() {
@@ -1478,19 +1538,22 @@ function renderRouteList() {
   const list = document.getElementById('rv-list');
   if (!list) return;
 
-  if (!routeCards.length) {
+  const all = [...walkCards, ...routeCards]
+    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+
+  if (!all.length) {
     list.innerHTML = '<p class="rv-empty">아직 기록된 경로가 없어요 🐾</p>';
     return;
   }
 
-  list.innerHTML = routeCards.map(r => {
+  list.innerHTML = all.map(r => {
     const km   = (r.distance / 1000).toFixed(2);
     const mm   = String(Math.floor(r.duration / 60)).padStart(2, '0');
     const ss   = String(r.duration % 60).padStart(2, '0');
-    const date = r.startedAt ? r.startedAt.slice(0, 10) : '';
+    const date = (r.startedAt || r.createdAt || '').slice(0, 10);
     return `<div class="rv-card" onclick="showRouteOnMap('${r.id}')">
       <div class="rv-card-top">
-        <span class="rv-card-date">📅 ${date}</span>
+        <span class="rv-card-date">📅 ${date}${r.hasPhoto ? ' 📷' : ''}</span>
         <span class="rv-card-del" onclick="deleteRoute(event,'${r.id}')">✕</span>
       </div>
       <div class="rv-card-stats">
@@ -1503,7 +1566,7 @@ function renderRouteList() {
 }
 
 function showRouteOnMap(routeId) {
-  const r = routeCards.find(x => x.id === routeId);
+  const r = [...walkCards, ...routeCards].find(x => x.id === routeId);
   if (!r?.points?.length) return;
 
   switchTab('map');
@@ -1530,7 +1593,11 @@ async function deleteRoute(e, routeId) {
   e.stopPropagation();
   if (!confirm('이 경로를 삭제할까요?')) return;
   try {
-    await db.collection('routes').doc(routeId).delete();
+    await Promise.allSettled([
+      db.collection('walks').doc(routeId).delete(),
+      db.collection('routes').doc(routeId).delete(),
+      videoDB.remove(routeId),
+    ]);
     toast('삭제됐어요');
   } catch {
     toast('삭제에 실패했어요');
@@ -1638,4 +1705,132 @@ function updateFogStats() {
     cards.map(c => `${Math.round(c.lat / 0.005)}_${Math.round(c.lon / 0.005)}`)
   );
   el.textContent = `🗺️ ${tileSet.size}개 구역 · ${cards.length}곳 탐색`;
+}
+
+// ── 산책 인증 (walk photos) ───────────────────────────────────────────────────
+function handleRoutePhoto(file) {
+  if (!file?.type.startsWith('image/')) { toast('이미지 파일만 선택해주세요'); return; }
+  routePhotoFile = file;
+  const img = document.getElementById('rp-img');
+  if (img) img.src = URL.createObjectURL(file);
+  document.getElementById('rp-no-photo')?.classList.add('hidden');
+  document.getElementById('rp-preview')?.classList.remove('hidden');
+}
+
+function clearRoutePhoto() {
+  routePhotoFile = null;
+  const img = document.getElementById('rp-img');
+  if (img) img.src = '';
+  document.getElementById('rp-no-photo')?.classList.remove('hidden');
+  document.getElementById('rp-preview')?.classList.add('hidden');
+}
+
+async function skipRoutePhoto() {
+  document.getElementById('route-photo-modal')?.classList.add('hidden');
+  await saveRoute();
+}
+
+async function confirmSaveRoute() {
+  const btn = document.getElementById('btn-save-route');
+  if (btn) btn.disabled = true;
+  document.getElementById('route-photo-modal')?.classList.add('hidden');
+  await saveRoute();
+  if (btn) btn.disabled = false;
+}
+
+// ── 산책 구독 ──────────────────────────────────────────────────────────────────
+function subscribeToWalks() {
+  walksUnsubList.forEach(u => u());
+  walksUnsubList = [];
+
+  const u = db.collection('walks')
+    .where('userId', '==', currentUser.id)
+    .onSnapshot(
+      snap => {
+        walkCards = snap.docs.map(d => d.data())
+          .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        if (currentTab === 'feed')  renderFeed();
+        if (currentTab === 'route') renderRouteList();
+      },
+      err => console.error('[walks]', err)
+    );
+  walksUnsubList.push(u);
+}
+
+// ── 산책 피드 카드 ────────────────────────────────────────────────────────────
+function walkFeedCard(walk) {
+  const km   = (walk.distance / 1000).toFixed(2);
+  const mm   = String(Math.floor(walk.duration / 60)).padStart(2, '0');
+  const ss   = String(walk.duration % 60).padStart(2, '0');
+  const date = (walk.startedAt || walk.createdAt || '').slice(0, 10);
+  const byOther = walk.userId !== currentUser?.id;
+
+  return `<div class="wc">
+    <div class="wc-header">
+      <div class="wc-avatar">${esc((walk.userNickname || '?')[0])}</div>
+      <div class="wc-meta">
+        <span class="wc-name">${byOther ? esc(walk.userNickname || '?') : '나의 산책'}</span>
+        <span class="wc-date">📅 ${date}</span>
+      </div>
+      ${!byOther ? `<button class="wc-del" onclick="deleteWalk(event,'${walk.id}')">✕</button>` : ''}
+    </div>
+    ${walk.hasPhoto ? `<div class="wc-photo" id="wc-photo-${walk.id}">
+      <div class="wc-img" style="display:flex;align-items:center;justify-content:center;background:var(--s3);color:var(--tmut);font-size:12px;">불러오는 중...</div>
+    </div>` : ''}
+    <div class="wc-stats">
+      <span>📍 ${km} km</span>
+      <span>⏱ ${mm}:${ss}</span>
+    </div>
+  </div>`;
+}
+
+async function loadWalkPhotos() {
+  for (const walk of walkCards) {
+    if (!walk.hasPhoto) continue;
+    const el = document.getElementById(`wc-photo-${walk.id}`);
+    if (!el) continue;
+    const blob = await videoDB.get(walk.id).catch(() => null);
+    if (!blob) { el.remove(); continue; }
+    el.innerHTML = `<img class="wc-img" src="${URL.createObjectURL(blob)}" alt="산책 인증샷" loading="lazy">`;
+  }
+}
+
+async function deleteWalk(e, walkId) {
+  e.stopPropagation();
+  if (!confirm('이 산책 기록을 삭제할까요?')) return;
+  try {
+    await Promise.allSettled([
+      db.collection('walks').doc(walkId).delete(),
+      videoDB.remove(walkId),
+    ]);
+    toast('삭제됐어요');
+  } catch {
+    toast('삭제에 실패했어요');
+  }
+}
+
+// ── 단골 산책로 / 연속 산책 스트릭 ───────────────────────────────────────────
+function isRegularSpot(card) {
+  const threshold = 0.001;
+  const nearby = cards.filter(c =>
+    Math.abs(c.lat - card.lat) < threshold &&
+    Math.abs(c.lon - card.lon) < threshold
+  );
+  return nearby.length >= 3;
+}
+
+function getStreak() {
+  if (!walkCards.length) return { count: 0 };
+  const dates = new Set(
+    walkCards.map(w => (w.startedAt || w.createdAt || '').slice(0, 10)).filter(Boolean)
+  );
+  let count = 0;
+  const d = new Date();
+  while (true) {
+    const ds = d.toISOString().slice(0, 10);
+    if (!dates.has(ds)) break;
+    count++;
+    d.setDate(d.getDate() - 1);
+  }
+  return { count };
 }

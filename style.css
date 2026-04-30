@@ -1,3 +1,37 @@
+/* ── PWA: safe-area & 스플래시 ── */
+:root {
+  --safe-top:    env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* standalone(홈 화면 앱) 모드에서 노치·홈바 영역 확보 */
+@media all and (display-mode: standalone) {
+  .hud-header  { padding-top: calc(12px + var(--safe-top)); }
+  .tab-bar     { padding-bottom: var(--safe-bottom); height: calc(var(--tab-h) + var(--safe-bottom)); }
+  .sheet       { bottom: calc(var(--tab-h) + var(--safe-bottom)); }
+  .toast       { bottom: calc(28px + var(--tab-h) + var(--safe-bottom)); }
+  .btn-myloc   { bottom: calc(104px + var(--tab-h) + var(--safe-bottom)); }
+  .zoom-ctrl   { bottom: calc(32px  + var(--tab-h) + var(--safe-bottom)); }
+  .btn-fog     { bottom: calc(152px + var(--tab-h) + var(--safe-bottom)); }
+  .fog-stats-pill { bottom: calc(var(--tab-h) + var(--safe-bottom) + 14px); }
+  .feed-view, .coll-view, .route-view {
+    bottom: calc(var(--tab-h) + var(--safe-bottom));
+  }
+}
+
+/* 스플래시: 앱 로딩 중 보이는 배경 (body 자체가 --bg) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 10000;
+  opacity: 1;
+  transition: opacity .4s .2s ease;
+  pointer-events: none;
+}
+body.ready::before { opacity: 0; }
+
 /* ── Reset ── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -1306,6 +1340,223 @@ html, body {
   background-repeat: no-repeat;
   background-position: right 14px center;
   padding-right: 36px;
+  cursor: pointer;
+}
+
+/* ── 프로필 스트릭 ── */
+.pm-streak {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--acc2);
+  min-height: 1em;
+}
+
+/* ── 단골 산책로 뱃지 ── */
+.fc-regular {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fbbf24;
+  background: rgba(251,191,36,.12);
+  border: 1px solid rgba(251,191,36,.3);
+  border-radius: 50px;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+/* ── 산책 카드 (피드) ── */
+.feed-section-head {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tmut);
+  text-transform: uppercase;
+  letter-spacing: .7px;
+  padding: 4px 0 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--bd);
+}
+
+.wc {
+  background: var(--s1);
+  border: 1px solid var(--bd);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.wc-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px 10px;
+}
+
+.wc-avatar {
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  background: var(--s3);
+  border: 1.5px solid var(--bdm);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700;
+  color: var(--text);
+  flex-shrink: 0;
+}
+
+.wc-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wc-name { font-size: 14px; font-weight: 700; color: var(--text); }
+.wc-date { font-size: 11px; color: var(--tmut); }
+
+.wc-del {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: none; border: none;
+  color: var(--tmut); font-size: 13px;
+  cursor: pointer; flex-shrink: 0;
+  transition: background .15s, color .15s;
+}
+.wc-del:hover { background: rgba(248,113,113,.15); color: #f87171; }
+
+.wc-photo {
+  width: 100%;
+  aspect-ratio: 4/3;
+  background: #000;
+  overflow: hidden;
+}
+
+.wc-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wc-stats {
+  display: flex;
+  gap: 14px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.wc-footer {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--bd);
+  padding-top: 8px;
+}
+
+.wc-like {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  background: none;
+  border: 1px solid var(--bd);
+  border-radius: 50px;
+  color: var(--tmut);
+  font-size: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, border-color .15s, color .15s, transform .12s;
+}
+.wc-like:hover  { background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.3); }
+.wc-like:active { transform: scale(.93); }
+.wc-like.liked  {
+  border-color: rgba(239,68,68,.4);
+  color: var(--text);
+}
+
+.wc-like-cnt { font-size: 13px; font-weight: 600; }
+
+/* ── 산책 인증 모달 ── */
+.rp-card {
+  max-width: 420px;
+}
+
+.rp-stats {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 10px 0 16px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  border-bottom: 1px solid var(--bd);
+  margin-bottom: 16px;
+}
+
+.rp-body {
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin-bottom: 16px;
+}
+
+.rp-no-photo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+}
+.rp-no-photo.hidden { display: none; }
+
+.rp-hint {
+  font-size: 13px;
+  color: var(--tmut);
+  text-align: center;
+}
+
+.rp-photo-btns {
+  display: flex;
+  gap: 10px;
+}
+
+.rp-btn {
+  flex: 1;
+  padding: 12px 16px;
+  background: var(--s2);
+  border: 1px solid var(--bdm);
+  border-radius: var(--rs);
+  color: var(--t2);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .15s, color .15s;
+}
+.rp-btn:hover { background: var(--s3); color: var(--text); }
+
+.rp-preview {
+  position: relative;
+  border-radius: var(--rs);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4/3;
+}
+.rp-preview.hidden { display: none; }
+
+.rp-img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.rp-clear {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: rgba(0,0,0,.65);
+  border: none; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
   cursor: pointer;
 }
 
